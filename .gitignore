@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+node_modules/
+dist/
+.env
+data/*.sqlite3
+data/temp/*
+!data/temp/.gitkeep
+data/reference_voices/*
+!data/reference_voices/.gitkeep

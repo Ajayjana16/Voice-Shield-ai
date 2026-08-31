@@ -1,0 +1,52 @@
+<svg width="1200" height="600" viewBox="0 0 1200 600" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="waveGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2563EB" stop-opacity="0.15" />
+      <stop offset="50%" stop-color="#38BDF8" stop-opacity="0.12" />
+      <stop offset="100%" stop-color="#818CF8" stop-opacity="0.05" />
+    </linearGradient>
+    <linearGradient id="waveGrad2" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#06B6D4" stop-opacity="0.12" />
+      <stop offset="100%" stop-color="#2563EB" stop-opacity="0.03" />
+    </linearGradient>
+    <pattern id="dotGrid" x="0" y="0" width="30" height="30" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.2" fill="#2563EB" fill-opacity="0.06" />
+    </pattern>
+  </defs>
+
+  <!-- Dot matrix background -->
+  <rect width="1200" height="600" fill="url(#dotGrid)" />
+
+  <!-- Acoustic Frequency Waves -->
+  <path d="M0 300 C 150 200, 300 420, 450 310 C 600 200, 750 440, 900 320 C 1050 200, 1150 360, 1200 300" stroke="url(#waveGrad1)" stroke-width="2.5" stroke-linecap="round" fill="none" />
+  <path d="M0 330 C 180 250, 320 450, 480 340 C 640 230, 780 470, 940 350 C 1080 230, 1160 390, 1200 330" stroke="url(#waveGrad2)" stroke-width="1.8" stroke-dasharray="6 6" fill="none" />
+  <path d="M0 270 C 120 180, 280 380, 420 280 C 560 180, 720 400, 860 290 C 1000 180, 1120 340, 1200 270" stroke="url(#waveGrad1)" stroke-width="1.2" stroke-opacity="0.6" fill="none" />
+
+  <!-- Equalizer Frequency Bar Accents -->
+  <g opacity="0.08" stroke="#2563EB" stroke-width="2" stroke-linecap="round">
+    <line x1="80" y1="280" x2="80" y2="320" />
+    <line x1="100" y1="250" x2="100" y2="350" />
+    <line x1="120" y1="220" x2="120" y2="380" />
+    <line x1="140" y1="260" x2="140" y2="340" />
+    <line x1="160" y1="290" x2="160" y2="310" />
+
+    <line x1="1040" y1="280" x2="1040" y2="320" />
+    <line x1="1060" y1="240" x2="1060" y2="360" />
+    <line x1="1080" y1="210" x2="1080" y2="390" />
+    <line x1="1100" y1="250" x2="1100" y2="350" />
+    <line x1="1120" y1="290" x2="1120" y2="310" />
+  </g>
+
+  <!-- Neural Network Data Nodes -->
+  <g opacity="0.15">
+    <circle cx="300" cy="420" r="4" fill="#2563EB" />
+    <circle cx="450" cy="310" r="5" fill="#38BDF8" />
+    <circle cx="600" cy="200" r="4" fill="#2563EB" />
+    <circle cx="750" cy="440" r="6" fill="#38BDF8" />
+    <circle cx="900" cy="320" r="4" fill="#2563EB" />
+    <line x1="300" y1="420" x2="450" y2="310" stroke="#38BDF8" stroke-width="1" stroke-dasharray="3 3" />
+    <line x1="450" y1="310" x2="600" y2="200" stroke="#38BDF8" stroke-width="1" stroke-dasharray="3 3" />
+    <line x1="600" y1="200" x2="750" y2="440" stroke="#38BDF8" stroke-width="1" stroke-dasharray="3 3" />
+    <line x1="750" y1="440" x2="900" y2="320" stroke="#38BDF8" stroke-width="1" stroke-dasharray="3 3" />
+  </g>
+</svg>

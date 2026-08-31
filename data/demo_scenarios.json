@@ -1,0 +1,41 @@
+[
+  {
+    "id": "scenario-1",
+    "name": "SCENARIO 1: Normal Genuine Call",
+    "description": "Authentic caller matching registered voice profile with routine operational context.",
+    "speaker_id": "executive-ref",
+    "audio_file": "data/sample_audio/demo-genuine.wav",
+    "reference_audio": "data/sample_audio/demo-reference.wav",
+    "transcript": "Hello team, this is a routine status update on the quarterly engineering roadmap. Please review the documentation before our sprint planning meeting tomorrow.",
+    "expected_risk": "LOW (0-30)",
+    "expected_synthetic_risk": "LOW (Organic Human Acoustics)",
+    "expected_speaker_match": "MATCH (>90%)",
+    "expected_context_risk": "LOW (No Coercion)"
+  },
+  {
+    "id": "scenario-2",
+    "name": "SCENARIO 2: Suspicious Synthetic Voice (AI-Cloned / Deepfake)",
+    "description": "AI-generated synthetic voice clone containing neural vocoder artifacts, over-smoothed harmonics, and phase anomalies.",
+    "speaker_id": "executive-ref",
+    "audio_file": "data/sample_audio/demo-synthetic.wav",
+    "reference_audio": "data/sample_audio/demo-reference.wav",
+    "transcript": "Hello, I am calling regarding the quarterly budget allocation. We need to confirm the figures discussed yesterday.",
+    "expected_risk": "HIGH to CRITICAL (>60)",
+    "expected_synthetic_risk": "HIGH (>65% Vocoder Artifacts Detected)",
+    "expected_speaker_match": "MATCH (Acoustic Cloning Target)",
+    "expected_context_risk": "LOW to MEDIUM"
+  },
+  {
+    "id": "scenario-3",
+    "name": "SCENARIO 3: Social Engineering & Impersonation Extortion",
+    "description": "Impostor voice executing high-pressure financial coercion, OTP theft, and digital arrest threats.",
+    "speaker_id": "executive-ref",
+    "audio_file": "data/sample_audio/demo-call.wav",
+    "reference_audio": "data/sample_audio/demo-reference.wav",
+    "transcript": "This is urgent. Transfer 5 lakh rupees immediately to this account. Stay on the line, do not tell anyone, and send the netbanking OTP right now.",
+    "expected_risk": "CRITICAL (>85)",
+    "expected_synthetic_risk": "LOW to MEDIUM",
+    "expected_speaker_match": "MISMATCH (<60% Different Caller)",
+    "expected_context_risk": "CRITICAL (Financial Request + Urgency + Secrecy + OTP Theft)"
+  }
+]
