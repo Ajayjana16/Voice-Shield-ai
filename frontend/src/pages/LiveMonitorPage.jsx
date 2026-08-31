@@ -48,6 +48,118 @@ const INITIAL_LIVE_ANALYSIS = {
 
 const HIGH_RISK_TRIGGER_REGEX = /\b(otp|one[- ]time[- ]password|verification[- ]code|auth[- ]code|cvv|cvv\s*number|card\s*pin|atm\s*pin|upi\s*pin|mpin|password|bank\s*password|netbanking\s*password|login\s*password|passcode|card\s*number|debit\s*card|credit\s*card\s*number|transfer\s*money|send\s*money|wire\s*transfer|urgent\s*payment|immediate\s*payment|account\s*blocked|account\s*freeze|account\s*suspended|card\s*blocked|digital\s*arrest|arrest\s*warrant|police\s*case|fir\s*registered|crime\s*branch|cbi|customs\s*parcel|contraband|drugs\s*found|seized\s*parcel|remote\s*access|anydesk|teamviewer|quicksupport|screen\s*share|screen\s*sharing|tax\s*department|income\s*tax\s*notice|rbi\s*official)\b/i;
 
+function extractLocalThreatIndicators(text) {
+  const t = (text || "").toLowerCase();
+  const found = [];
+  let score = 0;
+  let category = "Routine / Normal Call";
+  let desc = "Conversational speech evaluated across telecommunication deception vectors.";
+  let rec = "Monitoring live call audio for fraudulent deception tactics.";
+
+  const hasOtp = /\b(otp|one[- ]time[- ]password|verification[- ]code|auth[- ]code|code\s*you\s*received|tell\s*me\s*the\s*code|tell\s*the\s*otp|send\s*the\s*otp|share\s*the\s*otp)\b/i.test(t);
+  const hasPin = /\b(cvv|atm[- ]pin|upi[- ]pin|mpin|netbanking\s*password|bank\s*password|login\s*password)\b/i.test(t);
+  const hasUrgency = /\b(immediately|right\s*now|within\s*\d+\s*minutes|urgent|hurry|quickly|account\s*blocked|account\s*freeze|before\s*it\s*expires)\b/i.test(t);
+  const hasArrest = /\b(cbi|police|customs|digital\s*arrest|arrest\s*warrant|crime\s*branch|court\s*order|narcotics|seized\s*parcel|contraband)\b/i.test(t);
+  const hasFinance = /\b(transfer\s*money|send\s*money|wire\s*transfer|pay\s*now|security\s*deposit|escrow\s*account)\b/i.test(t);
+  const hasRemote = /\b(anydesk|teamviewer|quicksupport|screen\s*share|remote\s*access)\b/i.test(t);
+
+  if (hasOtp) {
+    found.push({
+      category: "CREDENTIAL_OTP",
+      label: "Request for OTP / Verification Code",
+      severity: "CRITICAL",
+      matched_cue: text.match(/\b(otp|one[- ]time[- ]password|verification[- ]code|auth[- ]code|tell\s*the\s*otp|share\s*the\s*otp)\b/i)?.[0] || "OTP request",
+      explanation: "The caller is explicitly requesting a one-time password or verification code.",
+      why_it_matters: "Legitimate institutions and banks NEVER request one-time passwords over the phone.",
+    });
+    score = Math.max(score, hasUrgency ? 85 : 75);
+    category = "OTP & Credential Theft Attempt";
+    desc = "Caller is attempting to extract one-time authentication codes or sensitive credentials.";
+    rec = "NEVER disclose OTPs, passwords, or verification codes to any caller.";
+  }
+
+  if (hasPin) {
+    found.push({
+      category: "CREDENTIAL_OTP",
+      label: "Banking PIN / CVV / Password Query",
+      severity: "CRITICAL",
+      matched_cue: text.match(/\b(cvv|atm[- ]pin|upi[- ]pin|mpin|password)\b/i)?.[0] || "credential query",
+      explanation: "The caller requested secret financial access credentials.",
+      why_it_matters: "PINs and CVVs allow attackers direct unauthorized monetary theft.",
+    });
+    score = Math.max(score, 88);
+    category = "Banking & Financial Credential Theft";
+    desc = "Direct solicitation of payment card CVV, ATM PIN, or Netbanking passwords.";
+    rec = "Disconnect the call immediately. Report the fraudulent attempt to your bank.";
+  }
+
+  if (hasUrgency) {
+    found.push({
+      category: "URGENCY_PRESSURE",
+      label: "Urgency & Psychological Time Pressure",
+      severity: "HIGH",
+      matched_cue: text.match(/\b(immediately|right\s*now|urgent|hurry|quickly|blocked)\b/i)?.[0] || "immediate pressure",
+      explanation: "The caller applied urgent psychological pressure to prevent rational verification.",
+      why_it_matters: "Scammers create artificial urgency to bypass your normal verification procedures.",
+    });
+    if (score === 0) {
+      score = 35;
+      category = "Urgent Pressure / Coercion Call";
+      desc = "The caller is forcing rapid action through artificial time constraints.";
+      rec = "Do not rush. Take time to independently verify caller claims.";
+    }
+  }
+
+  if (hasArrest) {
+    found.push({
+      category: "DIGITAL_ARREST_LEGAL_THREAT",
+      label: "Digital Arrest / Law Enforcement Coercion",
+      severity: "CRITICAL",
+      matched_cue: text.match(/\b(cbi|police|customs|digital\s*arrest|arrest|narcotics|parcel)\b/i)?.[0] || "authority threat",
+      explanation: "The caller is impersonating law enforcement or threatening legal action.",
+      why_it_matters: "Law enforcement agencies never conduct arrests or interrogations over phone/video calls.",
+    });
+    score = Math.max(score, hasFinance || hasUrgency ? 90 : 80);
+    category = "Digital Arrest & Authority Impersonation Extortion";
+    desc = "Extortion scheme impersonating CBI, Customs, Police, or Judiciary.";
+    rec = "Disregard threats of digital arrest. Disconnect immediately and notify local cyber crime helpline (1930).";
+  }
+
+  if (hasFinance) {
+    found.push({
+      category: "FINANCIAL_REQUEST",
+      label: "Coerced Fund Transfer Demand",
+      severity: "HIGH",
+      matched_cue: text.match(/\b(transfer\s*money|send\s*money|pay\s*now|deposit)\b/i)?.[0] || "fund transfer",
+      explanation: "The caller is demanding immediate funds transfer or fee payment.",
+      why_it_matters: "Coerced fund transfers to unknown or escrow accounts result in irreversible financial loss.",
+    });
+    score = Math.max(score, hasUrgency ? 75 : 60);
+    if (category === "Routine / Normal Call") {
+      category = "Suspicious Financial Transfer Demand";
+      desc = "Unsolicited demands for wire transfers, deposits, or processing fees.";
+      rec = "Do not transfer funds or make payments to unverified accounts.";
+    }
+  }
+
+  if (hasRemote) {
+    found.push({
+      category: "TECHNICAL_SUPPORT_REMOTE_ACCESS",
+      label: "Remote Access Tool Solicitation",
+      severity: "HIGH",
+      matched_cue: text.match(/\b(anydesk|teamviewer|quicksupport|remote\s*access)\b/i)?.[0] || "remote access",
+      explanation: "The caller asked to install remote device control software.",
+      why_it_matters: "Remote desktop utilities give attackers full control over your computer and banking accounts.",
+    });
+    score = Math.max(score, 75);
+    category = "Tech Support / Remote Access Scam";
+    desc = "Attempt to compromise device security via remote screen sharing software.";
+    rec = "Never install remote desktop applications at the request of an incoming caller.";
+  }
+
+  return { found, score, category, desc, rec };
+}
+
 export function LiveMonitorPage({ onNavigate }) {
   // Session State: 'idle' | 'monitoring' | 'finalizing' | 'completed' | 'error'
   const [sessionState, setSessionState] = useState("idle");
@@ -324,22 +436,72 @@ export function LiveMonitorPage({ onNavigate }) {
         addTimelineEvent("Transcript segment received", "info");
       }
 
+      // 1. Instant Real-Time Local Threat Evaluation (0ms latency on spoken words)
       if (activeRaw.length >= 3) {
-        const hasHighRisk = HIGH_RISK_TRIGGER_REGEX.test(activeRaw);
+        const localEval = extractLocalThreatIndicators(activeRaw);
+        if (localEval.found.length > 0) {
+          // Log timeline events for newly detected threat indicators
+          for (const ind of localEval.found) {
+            const cueKey = (ind.category || ind.label) + (ind.matched_cue || "");
+            if (!loggedThreatCuesRef.current.has(cueKey)) {
+              loggedThreatCuesRef.current.add(cueKey);
+              const cueStr = ind.matched_cue ? `: "${ind.matched_cue}"` : "";
+              addTimelineEvent(`Scam indicator detected: ${ind.label}${cueStr}`, ind.severity === "CRITICAL" ? "danger" : "warning");
+
+              if (!accumulatedThreatIndicatorsRef.current.some(e => e.label === ind.label && e.matched_cue === ind.matched_cue)) {
+                accumulatedThreatIndicatorsRef.current.push(ind);
+              }
+            }
+          }
+
+          if (
+            localEval.category &&
+            localEval.category !== prevScamCategoryRef.current &&
+            localEval.category !== "Routine / Normal Call"
+          ) {
+            addTimelineEvent(`Threat category updated: ${localEval.category}`, "warning");
+            prevScamCategoryRef.current = localEval.category;
+            highestThreatCategoryRef.current = localEval.category;
+          }
+
+          if (localEval.score > prevRiskScoreRef.current) {
+            addTimelineEvent(
+              `Threat score updated: ${localEval.score}/100`,
+              localEval.score >= 75 ? "danger" : "warning"
+            );
+            prevRiskScoreRef.current = localEval.score;
+            maxSessionRiskScoreRef.current = Math.max(maxSessionRiskScoreRef.current, localEval.score);
+          }
+
+          const localLevel = localEval.score >= 80 ? "CRITICAL RISK" : localEval.score >= 60 ? "HIGH RISK" : localEval.score >= 30 ? "MODERATE RISK" : "LOW RISK";
+          setLiveAnalysis((prev) => {
+            const updated = {
+              ...prev,
+              riskScore: Math.max(prev.riskScore || 0, localEval.score),
+              threatLevel: localLevel,
+              scamCategory: localEval.category,
+              confidence: "HIGH",
+              scamDesc: localEval.desc,
+              indicators: accumulatedThreatIndicatorsRef.current.length > 0 ? accumulatedThreatIndicatorsRef.current : localEval.found,
+              recommendation: localEval.rec,
+              updatedAt: Date.now(),
+            };
+            liveAnalysisRef.current = updated;
+            return updated;
+          });
+        }
+      }
+
+      // 2. Debounced Backend Deep NLP Inference (300ms)
+      if (activeRaw.length >= 3) {
         if (analysisTimeoutRef.current) {
           clearTimeout(analysisTimeoutRef.current);
           analysisTimeoutRef.current = null;
         }
 
-        if (hasHighRisk) {
-          // Immediate 0ms analysis for critical keywords
+        analysisTimeoutRef.current = setTimeout(() => {
           performLiveAnalysis(activeRaw);
-        } else {
-          // Debounced 800ms analysis for normal speech
-          analysisTimeoutRef.current = setTimeout(() => {
-            performLiveAnalysis(activeRaw);
-          }, 800);
-        }
+        }, 300);
       }
     },
   });
