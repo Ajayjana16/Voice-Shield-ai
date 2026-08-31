@@ -154,7 +154,14 @@ export function useSpeechRecognition({ onTranscript, onStatusChange }) {
       recognitionRef.current = null;
     }
     setIsListening(false);
-    setInterimText("");
+    // Commit any remaining interim text into confirmed text before clearing interimText
+    setInterimText((curInterim) => {
+      if (curInterim && curInterim.trim()) {
+        accumulatedFinalRef.current = appendFinalSegment(accumulatedFinalRef.current, curInterim);
+        setConfirmedText(accumulatedFinalRef.current);
+      }
+      return "";
+    });
   }, []);
 
   const reset = useCallback(() => {
@@ -162,6 +169,10 @@ export function useSpeechRecognition({ onTranscript, onStatusChange }) {
     setConfirmedText("");
     setInterimText("");
   }, []);
+
+  const getTranscript = useCallback(() => {
+    return accumulatedFinalRef.current || confirmedText || "";
+  }, [confirmedText]);
 
   useEffect(() => {
     return () => {
@@ -181,6 +192,7 @@ export function useSpeechRecognition({ onTranscript, onStatusChange }) {
     start,
     stop,
     reset,
+    getTranscript,
   };
 }
 

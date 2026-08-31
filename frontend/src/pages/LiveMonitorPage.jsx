@@ -83,6 +83,13 @@ export function LiveMonitorPage({ onNavigate }) {
   const [sessionElapsedSeconds, setSessionElapsedSeconds] = useState(0);
   const lastEventSecsRef = useRef(-1);
   const liveTranscriptRef = useRef("");
+  const accumulatedTranscriptRef = useRef("");
+  const liveAnalysisRef = useRef(INITIAL_LIVE_ANALYSIS);
+  const maxSessionRiskScoreRef = useRef(0);
+  const highestThreatCategoryRef = useRef("Routine / Normal Call");
+  const accumulatedThreatIndicatorsRef = useRef([]);
+  const accumulatedEvidenceRef = useRef([]);
+
   const latestRequestIdRef = useRef(0);
   const lastAppliedRequestIdRef = useRef(0);
   const lastAnalyzedTranscriptRef = useRef("");
@@ -151,14 +158,18 @@ export function LiveMonitorPage({ onNavigate }) {
     const normalized = normalizeTranscript(trimmedRaw);
     if (!normalized) return;
 
-    if (normalized === lastAnalyzedTranscriptRef.current && liveAnalysis.status === "active") {
+    if (normalized === lastAnalyzedTranscriptRef.current && liveAnalysisRef.current.status === "active") {
       return;
     }
 
     latestRequestIdRef.current += 1;
     const currentRequestId = latestRequestIdRef.current;
 
-    setLiveAnalysis((prev) => ({ ...prev, status: "analyzing" }));
+    setLiveAnalysis((prev) => {
+      const updated = { ...prev, status: "analyzing" };
+      liveAnalysisRef.current = updated;
+      return updated;
+    });
 
     if (!analysisStartedLoggedRef.current) {
       analysisStartedLoggedRef.current = true;
@@ -192,8 +203,7 @@ export function LiveMonitorPage({ onNavigate }) {
           ? `${res.risk_level} RISK`
           : "LOW RISK";
 
-        // Atomic Synchronized State Update
-        setLiveAnalysis({
+        const updatedState = {
           status: "active",
           riskScore: isEvaluating ? null : finalScore,
           threatLevel: finalLevel,
@@ -204,7 +214,43 @@ export function LiveMonitorPage({ onNavigate }) {
           evidence: evidenceList,
           recommendation: res.recommendation || "Monitoring call conversation for telecommunication fraud tactics.",
           updatedAt: Date.now(),
-        });
+        };
+
+        // Update persistent synchronization ref and state
+        liveAnalysisRef.current = updatedState;
+        setLiveAnalysis(updatedState);
+
+        // Track peak score & category
+        if (finalScore > 0) {
+          maxSessionRiskScoreRef.current = Math.max(maxSessionRiskScoreRef.current, finalScore);
+        }
+        if (
+          finalCategory &&
+          finalCategory !== "Routine / Normal Call" &&
+          finalCategory !== "Listening for speech..."
+        ) {
+          highestThreatCategoryRef.current = finalCategory;
+        }
+
+        // Accumulate threat indicators across session
+        if (indicators && indicators.length > 0) {
+          for (const ind of indicators) {
+            const exists = accumulatedThreatIndicatorsRef.current.some(
+              (e) => (e.label === ind.label || e.category === ind.category) && e.matched_cue === ind.matched_cue
+            );
+            if (!exists) {
+              accumulatedThreatIndicatorsRef.current.push(ind);
+            }
+          }
+        }
+
+        if (evidenceList && evidenceList.length > 0) {
+          for (const ev of evidenceList) {
+            if (!accumulatedEvidenceRef.current.includes(ev)) {
+              accumulatedEvidenceRef.current.push(ev);
+            }
+          }
+        }
 
         // Timeline events for newly detected threat indicators
         for (const ind of indicators) {
@@ -237,9 +283,13 @@ export function LiveMonitorPage({ onNavigate }) {
       }
     } catch (err) {
       console.warn("Live analysis network notice:", err);
-      setLiveAnalysis((prev) => ({ ...prev, status: "active" }));
+      setLiveAnalysis((prev) => {
+        const updated = { ...prev, status: "active" };
+        liveAnalysisRef.current = updated;
+        return updated;
+      });
     }
-  }, [addTimelineEvent, liveAnalysis.status]);
+  }, [addTimelineEvent]);
 
   // Progressive Speech Recognition
   const speech = useSpeechRecognition({
@@ -247,6 +297,9 @@ export function LiveMonitorPage({ onNavigate }) {
       const activeRaw = (fullText || interimText || "").trim();
       setTranscript(fullText || interimText);
       liveTranscriptRef.current = fullText || interimText;
+      if (activeRaw) {
+        accumulatedTranscriptRef.current = activeRaw;
+      }
 
       // Append segment with timestamp
       if (activeRaw.length > 0) {
@@ -295,7 +348,7 @@ export function LiveMonitorPage({ onNavigate }) {
   const chunkRecorder = useChunkRecorder({
     onChunk: async (chunkFile) => {
       try {
-        const textToSend = liveTranscriptRef.current || transcript;
+        const textToSend = liveTranscriptRef.current || transcript || accumulatedTranscriptRef.current;
         const normalizedText = normalizeTranscript(textToSend);
 
         const result = await analyzeChunk({
@@ -346,6 +399,13 @@ export function LiveMonitorPage({ onNavigate }) {
       setErrorMessage(null);
       setFinalReport(null);
       setLiveAnalysis(INITIAL_LIVE_ANALYSIS);
+      liveAnalysisRef.current = INITIAL_LIVE_ANALYSIS;
+      maxSessionRiskScoreRef.current = 0;
+      highestThreatCategoryRef.current = "Routine / Normal Call";
+      accumulatedThreatIndicatorsRef.current = [];
+      accumulatedEvidenceRef.current = [];
+      accumulatedTranscriptRef.current = "";
+
       setTranscript("");
       setTranscriptSegments([]);
       liveTranscriptRef.current = "";
@@ -401,83 +461,116 @@ export function LiveMonitorPage({ onNavigate }) {
       speech.stop();
       addTimelineEvent("Live audio capture ended", "info");
 
-      const capturedText = (liveTranscriptRef.current || transcript || "").trim();
+      const capturedText = (
+        liveTranscriptRef.current ||
+        transcript ||
+        accumulatedTranscriptRef.current ||
+        speech.getTranscript?.() ||
+        ""
+      ).trim();
       const normalizedCaptured = normalizeTranscript(capturedText);
       console.log("[LiveMonitor] Step 2: Captured transcript ready. Length:", normalizedCaptured.length);
 
-      if (normalizedCaptured) {
-        addTimelineEvent("Executing final threat assessment", "info");
+      const liveState = liveAnalysisRef.current || INITIAL_LIVE_ANALYSIS;
+      const peakScore = Math.max(maxSessionRiskScoreRef.current || 0, liveState.riskScore || 0);
+      const accumulatedIndicators = accumulatedThreatIndicatorsRef.current.length > 0
+        ? accumulatedThreatIndicatorsRef.current
+        : (liveState.indicators || []);
+      const accumulatedEvidence = accumulatedEvidenceRef.current.length > 0
+        ? accumulatedEvidenceRef.current
+        : (liveState.evidence || []);
+      const knownCategory = highestThreatCategoryRef.current !== "Routine / Normal Call" && highestThreatCategoryRef.current !== "Listening for speech..."
+        ? highestThreatCategoryRef.current
+        : (liveState.scamCategory !== "Listening for speech..." ? liveState.scamCategory : "Routine / Normal Call");
 
-        // Helper timeout promise
-        const timeoutPromise = (ms, msg) =>
-          new Promise((_, reject) => setTimeout(() => reject(new Error(msg)), ms));
+      if (normalizedCaptured || peakScore > 0 || accumulatedIndicators.length > 0) {
+        addTimelineEvent("Executing final threat assessment", "info");
 
         let reportData = null;
 
-        // Try fast context analysis with trained NLP scam model (guaranteed timeout 3.5s)
-        try {
-          console.log("[LiveMonitor] Step 3: Invoking trained scam detection model...");
-          const contextRes = await Promise.race([
-            analyzeContext(normalizedCaptured),
-            timeoutPromise(3500, "Context analysis request timeout"),
-          ]);
+        // Try fast context analysis with trained NLP scam model if text exists
+        if (normalizedCaptured) {
+          try {
+            console.log("[LiveMonitor] Step 3: Invoking trained scam detection model on complete text...");
+            const timeoutPromise = (ms, msg) =>
+              new Promise((_, reject) => setTimeout(() => reject(new Error(msg)), ms));
 
-          if (contextRes) {
-            console.log("[LiveMonitor] Step 4: Model inference successful:", contextRes.classification, "Risk score:", contextRes.final_risk_score);
-            const finalScore = contextRes.final_risk_score ?? contextRes.context_risk_score ?? liveAnalysis.riskScore ?? 0;
-            const finalLevel = contextRes.final_threat_level || contextRes.risk_level || (liveAnalysis.threatLevel ? liveAnalysis.threatLevel.replace(" RISK", "") : "LOW");
-            const finalCat = contextRes.final_scam_category || contextRes.possible_scam_category || (liveAnalysis.scamCategory !== "Listening for speech..." ? liveAnalysis.scamCategory : "Routine / Normal Call");
-            const indicators = (contextRes.detected_indicators && contextRes.detected_indicators.length > 0)
-              ? contextRes.detected_indicators
-              : liveAnalysis.indicators;
-            const evidenceList = (contextRes.evidence && contextRes.evidence.length > 0)
-              ? contextRes.evidence
-              : liveAnalysis.evidence;
+            const contextRes = await Promise.race([
+              analyzeContext(normalizedCaptured),
+              timeoutPromise(4000, "Context analysis request timeout"),
+            ]);
 
-            reportData = {
-              analysis_id: "live_" + Date.now().toString(36),
-              created_at: new Date().toISOString(),
-              analysis_status: "completed",
-              final_risk_score: finalScore,
-              risk_level: finalLevel,
-              possible_scam_category: finalCat,
-              scam_category_confidence: contextRes.scam_category_confidence || liveAnalysis.confidence || "HIGH",
-              scam_category_description: contextRes.scam_category_description || liveAnalysis.scamDesc || "Conversational intent evaluated across known scam patterns.",
-              recommendation: contextRes.recommendation || liveAnalysis.recommendation || "Verify caller identity independently before sharing sensitive credentials.",
-              detected_threats: indicators,
-              evidence: evidenceList,
-              transcript: normalizedCaptured,
-              voice_authenticity: liveDeepfakeProb >= 0.85 ? "HIGH_CONFIDENCE_SYNTHETIC" : "LIKELY_HUMAN",
-              deepfake_probability: liveDeepfakeProb ?? 0.05,
-              risk_reasoning: indicators.length > 0
-                ? `Final session evaluation identified ${indicators.length} threat indicators in the live conversation.`
-                : "No high-confidence telecommunication fraud indicators were detected.",
-            };
+            if (contextRes) {
+              const apiScore = contextRes.final_risk_score ?? contextRes.context_risk_score ?? 0;
+              const resolvedScore = Math.max(apiScore, peakScore);
+              const resolvedLevel = resolvedScore >= 80 ? "CRITICAL" : resolvedScore >= 60 ? "HIGH" : resolvedScore >= 30 ? "MODERATE" : "LOW";
+              const resolvedCategory = (contextRes.final_scam_category && contextRes.final_scam_category !== "Routine / Normal Call")
+                ? contextRes.final_scam_category
+                : (contextRes.possible_scam_category && contextRes.possible_scam_category !== "Routine / Normal Call")
+                ? contextRes.possible_scam_category
+                : knownCategory;
+
+              const mergedIndicators = [...accumulatedIndicators];
+              if (contextRes.detected_indicators && contextRes.detected_indicators.length > 0) {
+                for (const ind of contextRes.detected_indicators) {
+                  if (!mergedIndicators.some((e) => (e.label === ind.label || e.category === ind.category) && e.matched_cue === ind.matched_cue)) {
+                    mergedIndicators.push(ind);
+                  }
+                }
+              }
+
+              const mergedEvidence = [...accumulatedEvidence];
+              if (contextRes.evidence && contextRes.evidence.length > 0) {
+                for (const ev of contextRes.evidence) {
+                  if (!mergedEvidence.includes(ev)) mergedEvidence.push(ev);
+                }
+              }
+
+              reportData = {
+                analysis_id: "live_" + Date.now().toString(36),
+                created_at: new Date().toISOString(),
+                analysis_status: "completed",
+                final_risk_score: resolvedScore,
+                risk_level: resolvedLevel,
+                possible_scam_category: resolvedCategory,
+                scam_category_confidence: contextRes.scam_category_confidence || liveState.confidence || "HIGH",
+                scam_category_description: contextRes.scam_category_description || liveState.scamDesc || "Conversational intent evaluated across known scam patterns.",
+                recommendation: contextRes.recommendation || liveState.recommendation || "Verify caller identity independently before sharing sensitive credentials.",
+                detected_threats: mergedIndicators,
+                evidence: mergedEvidence,
+                transcript: normalizedCaptured || "Live spoken dialogue captured during active monitoring.",
+                voice_authenticity: liveDeepfakeProb >= 0.85 ? "HIGH_CONFIDENCE_SYNTHETIC" : "LIKELY_HUMAN",
+                deepfake_probability: liveDeepfakeProb ?? 0.05,
+                risk_reasoning: mergedIndicators.length > 0
+                  ? `Final session evaluation identified ${mergedIndicators.length} threat indicators in the live conversation.`
+                  : "No high-confidence telecommunication fraud indicators were detected.",
+              };
+            }
+          } catch (apiErr) {
+            console.warn("[LiveMonitor] Finalization API notice:", apiErr);
           }
-        } catch (apiErr) {
-          console.warn("[LiveMonitor] Context analysis API notice:", apiErr);
         }
 
-        // If API did not return or timed out, build from live surveillance state
+        // Build guaranteed report from synchronized live telemetry
         if (!reportData) {
-          console.log("[LiveMonitor] Step 4b: Using live state telemetry for final report fallback.");
+          const resolvedLevel = peakScore >= 80 ? "CRITICAL" : peakScore >= 60 ? "HIGH" : peakScore >= 30 ? "MODERATE" : "LOW";
           reportData = {
             analysis_id: "live_" + Date.now().toString(36),
             created_at: new Date().toISOString(),
             analysis_status: "completed",
-            final_risk_score: liveAnalysis.riskScore ?? 0,
-            risk_level: liveAnalysis.threatLevel ? liveAnalysis.threatLevel.replace(" RISK", "") : "LOW",
-            possible_scam_category: liveAnalysis.scamCategory !== "Listening for speech..." ? liveAnalysis.scamCategory : "Routine / Normal Call",
-            scam_category_confidence: liveAnalysis.confidence || "MEDIUM",
-            scam_category_description: liveAnalysis.scamDesc || "Live surveillance evaluation.",
-            recommendation: liveAnalysis.recommendation || "Verify caller identity independently before sharing credentials.",
-            detected_threats: liveAnalysis.indicators || [],
-            evidence: liveAnalysis.evidence || [],
-            transcript: normalizedCaptured,
+            final_risk_score: peakScore,
+            risk_level: resolvedLevel,
+            possible_scam_category: knownCategory,
+            scam_category_confidence: liveState.confidence || (peakScore > 50 ? "HIGH" : "MEDIUM"),
+            scam_category_description: liveState.scamDesc || "Live surveillance evaluation.",
+            recommendation: liveState.recommendation || "Verify caller identity independently before sharing credentials.",
+            detected_threats: accumulatedIndicators,
+            evidence: accumulatedEvidence,
+            transcript: normalizedCaptured || "Live spoken dialogue captured during active monitoring.",
             voice_authenticity: liveDeepfakeProb >= 0.85 ? "HIGH_CONFIDENCE_SYNTHETIC" : "LIKELY_HUMAN",
             deepfake_probability: liveDeepfakeProb ?? 0.05,
-            risk_reasoning: (liveAnalysis.indicators || []).length > 0
-              ? `Final session evaluation identified ${liveAnalysis.indicators.length} threat indicators in the live conversation.`
+            risk_reasoning: accumulatedIndicators.length > 0
+              ? `Final session evaluation identified ${accumulatedIndicators.length} threat indicators in the live conversation.`
               : "No high-confidence telecommunication fraud indicators were detected.",
           };
         }
