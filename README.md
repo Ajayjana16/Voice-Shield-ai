@@ -1,178 +1,360 @@
-# VOICE SHIELD AI
+````md
+# 🛡️ Voice Shield AI — Real-Time Multi-Modal Voice Anti-Spoofing & Scam Detection System
 
-**Real-Time Multi-Modal Voice Anti-Spoofing & Impersonation Defense System**  
-*Smart India Hackathon (SIH) Cybersecurity Prototype*
+Voice Shield AI is an AI-powered cybersecurity prototype designed to detect AI-synthesized, cloned, deepfake, or manipulated voices while identifying social-engineering and voice-based scam attempts during phone or voice conversations.
 
-VOICE SHIELD AI is an AI-powered cybersecurity defense system prototype designed to detect AI-synthesized, cloned, deepfake, or manipulated voices, isolate biometric identity mismatches, and intercept multilingual social engineering extortion during voice calls.
-
----
-
-## ⚠️ Implementation Status & Model Configuration
-
-### Current Detection Models
-
-**Deepfake / Anti-Spoofing Detection:**
-- **Default Mode**: VoiceShield-Acoustic-v2 (Heuristic Fallback)
-  - CPU-friendly handcrafted detector using 8 acoustic features
-  - Analyzes spectral contrast, dynamic range, zero-crossing rate, pause patterns
-  - Works immediately without any model downloads or extra dependencies
-- **Optional Pretrained Model**: Configurable via `VOICE_SHIELD_DEEPFAKE_MODEL_ID` environment variable
-
-  **Verified Compatible Models** (standard HuggingFace `Wav2Vec2ForSequenceClassification`, labels: `fake`/`real`):
-  | Model ID | Labels | Trained On |
-  |---|---|---|
-  | `MelodyMachine/Deepfake-audio-detection` ← **RECOMMENDED** | `fake`/`real` | Multiple deepfake datasets |
-  | `MelodyMachine/Deepfake-audio-detection-V2` | `fake`/`real` | Multiple deepfake datasets |
-  | `Bisher/wav2vec2_ASV_deepfake_audio_detection` | `fake`/`real` | ASVspoof |
-  | `Hemgg/Deepfake-audio-detection` | `AIVoice`/`HumanVoice` | Multiple datasets |
-
-  To enable: `VOICE_SHIELD_DEEPFAKE_MODEL_ID=MelodyMachine/Deepfake-audio-detection` in `.env`
-  Requires: `pip install transformers torch soundfile scipy numpy`
-
-**Speaker Verification:**
-- **Current Implementation**: Handcrafted 64-D spectral embedding baseline
-  - Combines sub-band spectral energies, pitch harmonics, formant proxies
-  - Cosine similarity matching with calibrated threshold (0.70)
-  - **NOT a pretrained speaker recognition model** (no x-vectors, ECAPA-TDNN)
-  - For production: integrate speechbrain/spkrec-ecapa-voxceleb or similar
-
-**Multilingual Social Engineering:**
-- Keyword/pattern-based detection for 6 fraud categories
-- Supports English, Hindi (Devanagari & Hinglish), Telugu, Tamil
-- Rule-based system, not deep NLP classification
-
-### Evaluation & Accuracy Claims
-
-**⚠️ IMPORTANT:** The evaluation script (`scripts/evaluate_models.py`) contains TWO distinct sections:
-- **Section A - Unit Tests**: Synthetic mathematical tone signals to test detector logic
-- **Section B - Real Evaluation**: Fully implemented, runs when audio files are placed in `data/evaluation/`
-
-**Current metrics are from unit tests on synthetic tones, NOT real-world accuracy.**
-
-To perform real evaluation:
-1. Download ASVspoof, WaveFake, or similar labeled dataset
-2. Place bonafide samples in `data/evaluation/real/`
-3. Place spoofed samples in `data/evaluation/synthetic/`
-4. Re-run evaluation script — results auto-saved to `data/evaluation/results/`
-
+The system combines **real-time speech monitoring, voice authenticity analysis, acoustic feature extraction, scam detection, transcript analysis, and multi-signal threat fusion** to generate an explainable security assessment.
 
 ---
 
-## Key Highlights & Innovations
+## 🚀 Key Features
 
-1. **Multi-Modal Signal Fusion**: Fuses 4 orthogonal intelligence signals into an explainable 0–100 Impersonation Risk Score:
-   - **Synthetic Voice Detection ($45\%$)**: Vocoder artifact analysis, spectral contrast collapse, dynamic headroom over-smoothing, and high-frequency phase synthesis anomalies.
-   - **Biometric Speaker Verification ($20\%$)**: 64-dimensional spectral harmonic transfer function & pitch moments with $L_2$ normalized cosine similarity.
-   - **Prosody Anomaly Analysis ($15\%$)**: Rhythm, pitch drift, and conversational pause continuity.
-   - **Multilingual Social Engineering ($20\%$)**: 6 Indian cybersecurity threat categories supporting English, Hindi (Devanagari & Hinglish), Telugu, and Tamil.
-2. **Strict Signal Separation**: Explicit separation between *A. Synthetic Voice Risk* (is the voice AI-synthesized?) and *B. Speaker Identity Mismatch* (is the caller who they claim to be?).
-3. **Real-Time Streaming Aggregator**: Exponential Moving Average (EMA) smoothing, sliding window peak risk, trajectory trend analysis (`RISING`/`FALLING`/`STABLE`), and latency tracking.
-4. **Privacy by Design**: In-memory volatile audio chunk processing without permanent storage of caller voice data (DPDP Act 2023 compliant). Non-invertible mathematical speaker embeddings.
-5. **No Cloud Dependency**: Runs completely locally on CPU with optional pretrained neural model integration via Hugging Face.
+### 🎙️ Real-Time Live Monitoring
+- Live microphone monitoring
+- Speech activity detection
+- Progressive speech transcription
+- Real-time audio waveform visualization
+- Live threat score updates
+- Detection event timeline
+- Session finalization and security reporting
+
+### 🔍 Scam & Social Engineering Detection
+Detects suspicious conversational patterns such as:
+
+- OTP and verification code requests
+- Password and credential theft attempts
+- Banking and financial fraud
+- Urgency and psychological pressure
+- Authority impersonation
+- Suspicious payment requests
+- Social-engineering tactics
+
+### 🎭 Voice Authenticity Analysis
+Evaluates voice characteristics to identify potential:
+
+- AI-generated voices
+- Voice cloning
+- Synthetic speech artifacts
+- Deepfake voice patterns
+- Suspicious acoustic behavior
+- Voice consistency anomalies
+
+### 📊 Multi-Signal Threat Assessment
+
+Multiple detection signals are combined to generate an overall threat score from **0 to 100**.
+
+| Threat Level | Score |
+|---|---|
+| 🟢 Low Risk | 0–30 |
+| 🟡 Moderate Risk | 31–60 |
+| 🟠 High Risk | 61–80 |
+| 🔴 Critical Risk | 81–100 |
 
 ---
 
-## System Architecture
+## 🧠 How Voice Shield AI Works
 
 ```text
-                      [ Live Call Audio Stream (WAV / Telephony / WebRTC) ]
-                                                │
-                                                ▼
-                                [ Multi-Modal Preprocessing ]
-                               • Resampling to 16 kHz Mono
-                               • Windowed Sliding Chunking (0.5s - 3.0s)
-                                                │
-                 ┌──────────────────────────────┼──────────────────────────────┐
-                 │                              │                              │
-                 ▼                              ▼                              ▼
-    [ Deepfake / Anti-Spoof ]       [ Speaker Verification ]       [ Multilingual STT & Fraud ]
-    • Vocoder Artifact Analysis     • 64-D Harmonic Embedding      • 6 Indian Fraud Categories
-    • Spectral Contrast Collapse    • Cosine Similarity            • EN, HI, Hinglish, TE, TA
-    • Phase Synthesis / ZCR         • Calibrated Match Score       • OTP & Digital Arrest Cues
-                 │                              │                              │
-                 └──────────────────────────────┼──────────────────────────────┘
-                                                │
-                                                ▼
-                                 [ Explainable Risk Fusion Engine ]
-                                  Risk = 0.45·DF + 0.20·SPK + 0.15·PROS + 0.20·CTX
-                                 • Points Breakdown • Dominant Threat Driver
-                                                │
-                                                ▼
-                                 [ Streaming Chunk Aggregator ]
-                                 • EMA Smoothing • Trajectory Trend • Latency Track
-                                                │
-                                                ▼
-                                 [ Real-Time Alerts & UI Dashboard ]
-                                 • WebSocket Broadcast • 4 Metric Cards • Audit Report
+Audio Input
+    │
+    ▼
+Speech Activity Detection
+    │
+    ▼
+Speech-to-Text Processing
+    │
+    ├──────────────────► Scam & Social Engineering Detection
+    │
+    ▼
+Acoustic Feature Extraction
+    │
+    ▼
+Voice Authenticity Analysis
+    │
+    ▼
+Multi-Signal Threat Fusion
+    │
+    ▼
+Threat Score (0–100)
+    │
+    ▼
+Final Security Assessment Report
+````
+
+---
+
+## 🖥️ Application Modules
+
+### 🏠 Home
+
+Provides an overview of the Voice Shield AI platform and its cybersecurity capabilities.
+
+### 🔍 Analyze a Call
+
+Upload an audio recording or provide a conversation transcript for post-call forensic analysis.
+
+The system evaluates:
+
+* Audio characteristics
+* Voice authenticity
+* Scam indicators
+* Social-engineering patterns
+* Threat category
+* Overall threat score
+* Security recommendations
+
+### 🎙️ Live Monitor
+
+Monitor microphone audio in real time.
+
+Features include:
+
+* Live audio waveform
+* Speech activity detection
+* Progressive transcription
+* Real-time threat indicators
+* Live threat score
+* Detection event history
+* Final session security report
+
+### 📜 History
+
+Review previously completed call analysis and monitoring sessions.
+
+---
+
+## 🔬 Detection Capabilities
+
+### 1. Acoustic Voice Analysis
+
+The system analyzes multiple audio characteristics, including:
+
+* Spectral features
+* Dynamic range
+* Pitch variation
+* Speech pauses
+* Zero-crossing rate
+* Audio energy distribution
+* Frequency variation
+* Speech consistency
+
+These features help identify potentially synthetic, cloned, or manipulated voice behavior.
+
+### 2. Scam & Social Engineering Detection
+
+Conversation text is analyzed for suspicious patterns and security indicators.
+
+Example patterns include:
+
+* “Tell me the OTP”
+* “Share your verification code”
+* “Your bank account will be blocked”
+* “Act immediately”
+* “Send the money now”
+* “Do not disconnect the call”
+
+Detected conversational signals contribute to the overall threat assessment.
+
+### 3. Voice Authenticity Evaluation
+
+Voice Shield AI evaluates voice characteristics and can classify results such as:
+
+* Likely Human
+* Suspicious
+* Inconclusive
+* Likely Synthetic
+
+Voice authenticity results are combined with conversational scam indicators to produce a more comprehensive security assessment.
+
+---
+
+## 📊 Example Security Assessment
+
+```text
+THREAT LEVEL
+CRITICAL RISK
+
+THREAT SCORE
+85 / 100
+
+SCAM CATEGORY
+OTP & Credential Theft Attempt
+
+VOICE AUTHENTICITY
+HIGH CONFIDENCE SYNTHETIC
+
+DETECTED THREAT SIGNALS
+• Request for OTP / Verification Code
+• Urgency & Psychological Time Pressure
+• Synthetic Voice Artifact
+
+RECOMMENDED ACTION
+Never share OTPs, passwords, verification codes, or banking credentials.
+Disconnect the call and verify the caller using an official communication channel.
 ```
 
 ---
 
-## 3 SIH Evaluation Scenarios
+## 🏗️ Project Structure
 
-| Scenario | Voice Type | Claimed ID | Context / Intent | Expected Outcome |
-| :--- | :--- | :--- | :--- | :--- |
-| **1. Genuine Call** | Clean human voice (`demo-genuine.wav`) | Registered CEO (`demo-reference.wav`) | Routine engineering roadmap update | **LOW RISK (0-30)**, Deepfake: Real, Speaker: Match (>90%), Context: Safe |
-| **2. Cloned Voice** | AI-generated vocoder voice (`demo-synthetic.wav`) | Registered CEO (`demo-reference.wav`) | Budget confirmation | **HIGH/CRITICAL RISK (>60)**, Deepfake: Fake (>65%), Speaker: Match, Context: Normal |
-| **3. Impersonation Fraud** | Impostor voice (`demo-call.wav`) | Registered CEO (`demo-reference.wav`) | Urgent 5 Lakh transfer + OTP demand | **CRITICAL RISK (>85)**, Deepfake: Low, Speaker: Mismatch (<60%), Context: Critical |
+```text
+Voice-Shield-AI/
+│
+├── frontend/                 # User interface
+│   ├── src/
+│   └── public/
+│
+├── backend/                  # Backend API and services
+│
+├── data/                     # Application datasets
+│   ├── evaluation/
+│   └── reference_voices/
+│
+├── models/                   # Machine learning and detection models
+│
+├── scripts/                  # Training and evaluation scripts
+│
+├── docs/                     # Project documentation
+│
+├── .gitignore
+│
+└── README.md
+```
 
 ---
 
-## Quick Start Guide
+## 🛠️ Technology Stack
 
-### Prerequisites
-- Python 3.10, 3.11, or 3.13
-- Node.js 18+ and npm
-- (Optional) FFmpeg
+### Frontend
 
-### 1. Backend Setup
-```powershell
+* React
+* JavaScript / TypeScript
+* Responsive web interface
+
+### Backend
+
+* Python
+* REST API
+
+### AI & Machine Learning
+
+* Audio feature extraction
+* Speech processing
+* Voice authenticity analysis
+* Scam detection
+* Natural Language Processing
+* Machine learning models
+
+### Data
+
+* Voice datasets
+* Audio samples
+* Synthetic speech datasets
+* Scam conversation datasets
+* Evaluation datasets
+
+---
+
+## ⚙️ Installation
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/Ajayana16/Voice-Shield-ai.git
+cd Voice-Shield-ai
+```
+
+### 2. Setup the Backend
+
+```bash
 cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-### 2. Frontend Setup
-```powershell
+Start the backend:
+
+```bash
+python main.py
+```
+
+### 3. Setup the Frontend
+
+Open another terminal:
+
+```bash
 cd frontend
 npm install
 npm run dev
 ```
-Open:
-- Dashboard: [http://127.0.0.1:5173](http://127.0.0.1:5173)
-- Interactive API Docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 
 ---
 
-## Benchmark Results (Evaluation Status)
+## 🌐 Running the Application
 
-**Unit Test Results (Synthetic Tones):**
-- **Deepfake Detection**: 100% accuracy on synthetic tone discrimination (unit test, NOT real-world metric)
-  - Latency: ~450-500ms average (depends on model, audio length, CPU load)
-  - **Note**: Real deepfake detection requires evaluation on ASVspoof or similar dataset
-- **Speaker Verification (Handcrafted Baseline)**: Same speaker similarity 0.999, impostor mismatch 0.667 (unit test only)
-- **Multilingual Context**: 100% accuracy on pattern matching unit tests (deterministic, not NLP)
+After starting both frontend and backend services, open the frontend in your browser.
 
-**⚠️  Real Accuracy:** To be established with real labeled datasets. Currently no real-world evaluation data available.
-
----
-
-## Automated Test Suite
-
-Run the full pytest suite (20 unit and integration tests):
-```powershell
-cd backend
-.\.venv\Scripts\python.exe -m pytest tests -v
+```text
+Frontend: http://localhost:5173
+Backend:  http://localhost:8000
 ```
 
 ---
 
-## Technical Documentation Reference
-- Full Technical Architecture: [`docs/FINAL_ARCHITECTURE.md`](file:///docs/FINAL_ARCHITECTURE.md)
-- Step-by-Step Demo Guide: [`docs/DEMO_GUIDE.md`](file:///docs/DEMO_GUIDE.md)
-- SIH Presentation & Judge Q&A Guide: [`docs/SIH_PRESENTATION.md`](file:///docs/SIH_PRESENTATION.md)
+## 🧪 Project Status
 
-#   V o i c e - S h i e l d - a i  
- 
+Voice Shield AI is currently a **cybersecurity and AI prototype** focused on:
+
+* Real-time voice monitoring
+* Speech detection and transcription
+* Scam detection
+* Social-engineering detection
+* Voice authenticity analysis
+* AI-generated voice detection
+* Multi-signal threat assessment
+* Explainable security recommendations
+
+---
+
+## 🔮 Future Improvements
+
+* Improved deepfake detection models
+* Larger real-world training datasets
+* Advanced speaker verification
+* Multilingual speech analysis
+* Improved real-time inference
+* Mobile application support
+* Expanded scam detection categories
+* Improved ML model accuracy
+
+---
+
+## ⚠️ Disclaimer
+
+Voice Shield AI is a research and prototype project.
+
+Detection results should be treated as **security indicators and risk assessments**, not absolute proof. The system should not be the only basis for critical financial, legal, identity, or security decisions.
+
+---
+
+## 🎯 Project Goal
+
+The goal of Voice Shield AI is to provide an intelligent defense layer against modern voice-based cyber threats by combining:
+
+**Voice Analysis + AI Detection + Scam Intelligence + Threat Scoring**
+
+to help identify potentially dangerous voice conversations and provide actionable security guidance.
+
+---
+
+## 👨‍💻 Author
+
+**Ajayana16**
+
+### 🛡️ Voice Shield AI
+
+AI-powered protection against voice scams, impersonation, synthetic voices, voice cloning, deepfakes, and social-engineering attacks.
+
+⭐ If you find this project useful, consider giving the repository a star!
+
+```
+```
