@@ -1,7 +1,14 @@
 import axios from "axios";
 
-export const API_BASE_URL = "http://127.0.0.1:8000/api";
-export const WS_URL = "ws://127.0.0.1:8000/api/ws/live";
+// Derive API and WebSocket URLs from Vite environment variables with local dev fallback
+const rawApiUrl = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000/api";
+export const API_BASE_URL = rawApiUrl.replace(/\/+$/, "");
+
+export const WS_URL =
+  import.meta.env.VITE_WS_URL ||
+  (API_BASE_URL.startsWith("https://")
+    ? API_BASE_URL.replace(/^https:\/\//, "wss://") + "/ws/live"
+    : API_BASE_URL.replace(/^http:\/\//, "ws://") + "/ws/live");
 
 // Explicit timeout tiers according to workload complexity
 export const AUDIO_PROCESSING_TIMEOUT = 180000; // 180 seconds (3 min) for heavy acoustic feature extraction, transcription & neural inference
