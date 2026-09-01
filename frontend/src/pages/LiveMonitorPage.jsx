@@ -173,6 +173,7 @@ export function LiveMonitorPage({ onNavigate }) {
 
   // Audio Device Selection
   const [audioDevices, setAudioDevices] = useState([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState("");
   const [liveAnalysis, setLiveAnalysis] = useState(INITIAL_LIVE_ANALYSIS);
   const [transcript, setTranscript] = useState("");
   const [timelineEvents, setTimelineEvents] = useState([]);
