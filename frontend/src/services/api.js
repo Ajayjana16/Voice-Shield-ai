@@ -1,32 +1,26 @@
 import axios from "axios";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// API URL Resolution
-//
-// Production (Vercel): Set VITE_API_BASE_URL in Vercel Dashboard → Settings →
-//   Environment Variables to your Render backend URL, e.g.:
-//   VITE_API_BASE_URL = https://voice-shield-ai-xxxx.onrender.com/api
-//
-// Development: Falls back to http://127.0.0.1:8000/api automatically.
-//
-// COMMON MISTAKE: If VITE_API_BASE_URL is NOT set in Vercel, the build will
-// bake in the localhost fallback and every API call will fail with 404/Network
-// Error in production (requests go to the user's own browser, not the server).
-// ─────────────────────────────────────────────────────────────────────────────
-const rawApiUrl = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000/api";
+// Multiple environment variable fallbacks for Vercel / Netlify / Render deployments
+const rawApiUrl =
+  import.meta.env.VITE_API_BASE_URL ||
+  import.meta.env.VITE_API_URL ||
+  import.meta.env.VITE_BACKEND_URL ||
+  import.meta.env.VITE_RENDER_URL ||
+  import.meta.env.VITE_SERVER_URL ||
+  import.meta.env.NEXT_PUBLIC_API_URL ||
+  "http://127.0.0.1:8000/api";
+
 export const API_BASE_URL = rawApiUrl.replace(/\/+$/, "");
 
 // Log the resolved base URL on startup so it is always visible in DevTools.
 const isLocalhost = API_BASE_URL.includes("127.0.0.1") || API_BASE_URL.includes("localhost");
 if (isLocalhost && !import.meta.env.DEV) {
-  console.error(
-    "[VoiceShield] ⚠️ PRODUCTION MISCONFIGURATION: VITE_API_BASE_URL is not set.\n" +
-    "All API calls will fail because the frontend is pointing at localhost instead of the\n" +
-    "Render backend. Set VITE_API_BASE_URL in Vercel Dashboard → Settings → Environment Variables.\n" +
-    "Expected value: https://<your-service>.onrender.com/api"
+  console.warn(
+    "[VoiceShield] ⚠️ PRODUCTION NOTICE: VITE_API_BASE_URL is using localhost fallback.\n" +
+    "If backend is on Render, configure VITE_API_BASE_URL in your Vercel Project Settings."
   );
 } else {
-  console.log(`[VoiceShield] API Base URL: ${API_BASE_URL}`);
+  console.log(`[VoiceShield] Active API Base URL: ${API_BASE_URL}`);
 }
 
 export const WS_URL =
@@ -39,7 +33,7 @@ export const WS_URL =
 export const AUDIO_PROCESSING_TIMEOUT = 180000; // 180 seconds (3 min) for heavy acoustic feature extraction, transcription & neural inference
 export const TEXT_PROCESSING_TIMEOUT = 45000;   // 45 seconds for NLP intent classification
 export const DEFAULT_API_TIMEOUT = 20000;       // 20 seconds for standard telemetry / history
-export const HEALTH_CHECK_TIMEOUT = 8000;       // 8 seconds for health checks (Render may be slow to respond)
+export const HEALTH_CHECK_TIMEOUT = 8000;       // 8 seconds for health checks
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -152,15 +146,27 @@ export async function registerSpeaker({ file, speakerId }) {
 }
 
 export async function saveAnalysisRecord(payload) {
+  if (!payload || !payload.analysis_id) return null;
+
+  // 1. Immediately cache in localStorage so History is updated instantly
+  try {
+    const existing = JSON.parse(localStorage.getItem("voiceshield_history_cache") || "[]");
+    const filtered = existing.filter((item) => item.analysis_id !== payload.analysis_id);
+    localStorage.setItem("voiceshield_history_cache", JSON.stringify([payload, ...filtered].slice(0, 50)));
+  } catch (err) {
+    console.warn("LocalStorage cache error:", err);
+  }
+
+  // 2. Dispatch event so any open History view updates immediately
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("voiceshield:history_updated", { detail: payload }));
+  }
+
+  // 3. Persist to backend database
   try {
     const response = await apiClient.post(`/analysis/save`, payload, {
       timeout: DEFAULT_API_TIMEOUT,
     });
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(
-        new CustomEvent("voiceshield:history_updated", { detail: payload })
-      );
-    }
     return response.data;
   } catch (err) {
     console.warn("Failed to persist analysis record to backend database:", err);

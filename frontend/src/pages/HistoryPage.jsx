@@ -70,11 +70,34 @@ export function HistoryPage({ onNavigate }) {
 
   async function loadHistory(showLoading = true) {
     if (showLoading) setLoading(true);
+    let localRecords = [];
+    try {
+      localRecords = JSON.parse(localStorage.getItem("voiceshield_history_cache") || "[]");
+    } catch {}
+
     try {
       const data = await fetchAnalysisHistory(50);
-      setAnalyses(data || []);
+      const backendList = data || [];
+      const mergedMap = new Map();
+      for (const rec of localRecords) {
+        if (rec && rec.analysis_id) mergedMap.set(rec.analysis_id, rec);
+      }
+      for (const rec of backendList) {
+        if (rec && (rec.analysis_id || rec.id)) {
+          const key = rec.analysis_id || rec.id;
+          mergedMap.set(key, { ...mergedMap.get(key), ...rec, analysis_id: key });
+        }
+      }
+      const sorted = Array.from(mergedMap.values()).sort(
+        (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0)
+      );
+      setAnalyses(sorted.length > 0 ? sorted : backendList);
     } catch {
-      if (showLoading) setAnalyses([]);
+      if (localRecords.length > 0) {
+        setAnalyses(localRecords);
+      } else if (showLoading) {
+        setAnalyses([]);
+      }
     } finally {
       if (showLoading) setLoading(false);
     }

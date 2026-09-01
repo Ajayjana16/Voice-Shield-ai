@@ -44,27 +44,28 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
-        allow_origin_regex=r"https://.*\.vercel\.app",
+        allow_origin_regex=r"https://.*(\.vercel\.app|\.onrender\.com)",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.include_router(router, prefix=settings.api_prefix)
 
     # ─────────────────────────────────────────────────────────────────────
-    # Root-level endpoints (no /api prefix) for Render uptime probes
-    # Render probes GET / and HEAD / every 30 s; they MUST return HTTP 200.
-    # The frontend health check hits /api/health (via the router above).
-    # These two routes handle the bare-domain probes so Render marks the
-    # service as healthy and does NOT return 404.
+    # Root-level endpoints for Render probes & direct root health checks
     # ─────────────────────────────────────────────────────────────────────
     @app.get("/", include_in_schema=False)
+    @app.head("/", include_in_schema=False)
     def root_probe() -> dict:
         return {"status": "online", "service": "Voice Shield AI API"}
 
-    @app.get("/health", include_in_schema=False)
-    def root_health_probe() -> dict:
-        return {"status": "online", "service": "Voice Shield AI API"}
+    # Mount API routes with /api prefix (e.g. /api/audio/analyze, /api/analyses, /api/health)
+    app.include_router(router, prefix=settings.api_prefix)
+
+    # Mount API routes at root level as well (e.g. /audio/analyze, /analyses, /health, /ws/live)
+    # This guarantees that if Vercel environment variables point to either
+    # "https://backend.onrender.com/api" OR "https://backend.onrender.com",
+    # all endpoints resolve with 200 OK and never 404!
+    app.include_router(router, prefix="")
 
     return app
 

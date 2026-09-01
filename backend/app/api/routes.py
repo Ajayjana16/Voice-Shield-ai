@@ -139,6 +139,7 @@ def analyze_transcript_context(request: ContextRequest) -> ContextRiskResponse:
 
 
 @router.post("/audio/upload", response_model=AnalysisResponse)
+@router.post("/upload", response_model=AnalysisResponse)
 async def upload_audio(
     file: UploadFile = File(...),
     transcript: str | None = Form(default=None),
@@ -148,6 +149,7 @@ async def upload_audio(
 
 
 @router.post("/audio/analyze", response_model=AnalysisResponse)
+@router.post("/analyze", response_model=AnalysisResponse)
 async def analyze_audio(
     file: UploadFile = File(...),
     transcript: str | None = Form(default=None),
@@ -227,6 +229,7 @@ async def verify_speaker(speaker_id: str = Form(...), file: UploadFile = File(..
 
 @router.post("/analysis/save")
 @router.post("/analyses/save")
+@router.post("/save")
 def save_custom_analysis(payload: dict[str, Any]) -> dict[str, Any]:
     analysis_id = payload.get("analysis_id") or payload.get("id") or f"analysis_{uuid4().hex[:12]}"
     payload["analysis_id"] = analysis_id
@@ -236,7 +239,16 @@ def save_custom_analysis(payload: dict[str, Any]) -> dict[str, Any]:
     return {"status": "saved", "analysis_id": analysis_id}
 
 
+@router.get("/analyses", response_model=AnalysisHistoryResponse)
+@router.get("/analysis", response_model=AnalysisHistoryResponse)
+@router.get("/history", response_model=AnalysisHistoryResponse)
+@router.get("/analyses/history", response_model=AnalysisHistoryResponse)
+def list_recent_analyses(limit: int = 50) -> AnalysisHistoryResponse:
+    return AnalysisHistoryResponse(analyses=store.list_analyses(max(1, min(limit, 100))))
+
+
 @router.get("/analysis/{analysis_id}")
+@router.get("/analyses/{analysis_id}")
 def get_analysis(analysis_id: str) -> dict[str, Any]:
     payload = store.get_analysis(analysis_id)
     if not payload:
@@ -244,12 +256,8 @@ def get_analysis(analysis_id: str) -> dict[str, Any]:
     return payload
 
 
-@router.get("/analyses", response_model=AnalysisHistoryResponse)
-def list_recent_analyses(limit: int = 50) -> AnalysisHistoryResponse:
-    return AnalysisHistoryResponse(analyses=store.list_analyses(max(1, min(limit, 100))))
-
-
 @router.get("/analysis/{analysis_id}/report")
+@router.get("/analyses/{analysis_id}/report")
 def get_analysis_report(analysis_id: str) -> Response:
     payload = store.get_analysis(analysis_id)
     if not payload:

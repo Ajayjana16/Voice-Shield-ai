@@ -751,7 +751,7 @@ export function LiveMonitorPage({ onNavigate }) {
       } else {
         // No speech captured at all during session
         console.log("[LiveMonitor] Step 3: No speech captured during session.");
-        setFinalReport({
+        const noSpeechReport = {
           analysis_id: "live_" + Date.now().toString(36),
           created_at: new Date().toISOString(),
           analysis_status: "insufficient_audio",
@@ -767,12 +767,14 @@ export function LiveMonitorPage({ onNavigate }) {
           evidence: [],
           transcript: "",
           risk_reasoning: "Session concluded with zero detected voiced audio frames.",
-        });
+        };
+        setFinalReport(noSpeechReport);
+        await saveAnalysisRecord(noSpeechReport);
         addTimelineEvent("No speech detected during session", "info");
       }
     } catch (err) {
       console.error("[LiveMonitor] Critical stop monitoring error:", err);
-      setFinalReport({
+      const fallbackReport = {
         analysis_id: "live_" + Date.now().toString(36),
         created_at: new Date().toISOString(),
         analysis_status: "completed",
@@ -787,7 +789,9 @@ export function LiveMonitorPage({ onNavigate }) {
         transcript: liveTranscriptRef.current || transcript || "",
         voice_authenticity: liveDeepfakeProb >= 0.85 ? "HIGH_CONFIDENCE_SYNTHETIC" : "LIKELY_HUMAN",
         deepfake_probability: liveDeepfakeProb ?? 0.05,
-      });
+      };
+      setFinalReport(fallbackReport);
+      saveAnalysisRecord(fallbackReport);
     } finally {
       console.log("[LiveMonitor] Step 5: Finalization complete. Transitioning sessionState -> completed.");
       setSessionState("completed");
