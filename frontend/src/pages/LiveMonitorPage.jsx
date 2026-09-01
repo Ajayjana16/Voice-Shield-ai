@@ -28,7 +28,11 @@ import {
 } from "lucide-react";
 import { Waveform } from "../components/Waveform";
 import ThreatSignalCard from "../components/ThreatSignalCard";
-import { useChunkRecorder } from "../hooks/useChunkRecorder";
+import {
+  useChunkRecorder,
+  getMobileSafeMicrophoneStream,
+  isAudioTrackActive,
+} from "../hooks/useChunkRecorder";
 import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
 import {
   analyzeChunk,
@@ -553,15 +557,48 @@ export function LiveMonitorPage({ onNavigate }) {
     }
   }, [speech.segments, speech.interimText, transcript]);
 
-  // Start Live Monitoring Session
+  // Mobile Page Lifecycle Management (Screen Lock, App Switch, Visibility Change)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        console.log("[VoiceShield Mobile] Tab/Page returned to foreground.");
+        if (chunkRecorder.isLive) {
+          chunkRecorder.resumeAudioContext?.();
+        }
+      } else if (document.visibilityState === "hidden") {
+        console.log("[VoiceShield Mobile] Tab/Page hidden in background.");
+      }
+    };
+
+    const handlePageHide = () => {
+      if (sessionState === "monitoring") {
+        console.log("[VoiceShield Mobile] pagehide event triggered, releasing audio resources.");
+        chunkRecorder.stop();
+        speech.stop();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pagehide", handlePageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pagehide", handlePageHide);
+    };
+  }, [chunkRecorder, speech, sessionState]);
+
+  // Start Live Monitoring Session with Mobile-Safe Pipeline
   const handleStartMonitoring = async () => {
+    if (sessionState === "starting" || sessionState === "monitoring") return;
+
     const t0 = performance.now();
     window.__VOICE_SHIELD_TIMINGS__ = { T0: t0, T1: 0, T2: 0, T3: 0, T4: 0, T5: 0 };
-    console.log(`[VoiceShield Debug] LIVE_START_TIME at ${t0.toFixed(1)} ms`);
-    console.log("[Latency Audit] T0: Start Live Monitoring clicked");
+    console.log(`[VoiceShield Mobile] T0: Start Live Monitoring clicked at ${t0.toFixed(1)} ms`);
+
+    setErrorMessage(null);
+    setSessionState("starting");
+    setStatusMessage("Requesting microphone permission...");
 
     try {
-      setErrorMessage(null);
       setFinalReport(null);
       setLiveAnalysis(INITIAL_LIVE_ANALYSIS);
       liveAnalysisRef.current = INITIAL_LIVE_ANALYSIS;
@@ -589,37 +626,44 @@ export function LiveMonitorPage({ onNavigate }) {
         { id: "evt_1", seq: 1, time: "00:00", text: "Live call monitoring initiated", severity: "info", timestamp: Date.now() },
       ]);
 
-      setSessionState("monitoring");
-      setStatusMessage("Continuous live call surveillance active. Listening & transcribing in real time...");
-
-      // 1. Acquire single microphone media stream
-      const micStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
+      // 1. Acquire mobile-safe microphone stream (with automatic constraint fallback)
+      const micStream = await getMobileSafeMicrophoneStream(selectedDeviceId);
       const t1 = performance.now();
       window.__VOICE_SHIELD_TIMINGS__.T1 = t1;
-      console.log(`[Latency Audit] T1: Mic permission granted in ${(t1 - t0).toFixed(1)} ms`);
+      console.log(`[VoiceShield Mobile] T1: Mic permission granted in ${(t1 - t0).toFixed(1)} ms`);
 
-      // 2. Start SpeechRecognition IMMEDIATELY
+      if (!isAudioTrackActive(micStream)) {
+        throw new Error("Active audio track is not producing data or is disabled.");
+      }
+
+      setStatusMessage("Starting continuous speech recognition & acoustic monitoring...");
+
+      // 2. Start SpeechRecognition
       const t2 = performance.now();
       window.__VOICE_SHIELD_TIMINGS__.T2 = t2;
       speech.start();
-      console.log(`[Latency Audit] T2: speech.start() dispatched in ${(t2 - t1).toFixed(1)} ms`);
+      console.log(`[VoiceShield Mobile] T2: speech.start() dispatched in ${(t2 - t1).toFixed(1)} ms`);
 
-      // 3. Hand stream asynchronously to chunkRecorder (VAD + waveform + 2s rolling chunks)
-      chunkRecorder.start(micStream).then(() => {
-        addTimelineEvent("Microphone connected", "info");
-      }).catch((err) => {
-        console.warn("Secondary audio analyzer startup notice:", err);
-      });
+      // 3. Start ChunkRecorder & resume AudioContext (VAD + Web Audio Analyser + Waveform)
+      await chunkRecorder.start(micStream, selectedDeviceId);
+      addTimelineEvent("Microphone connected & active", "info");
+
+      setSessionState("monitoring");
+      setStatusMessage("Continuous live call surveillance active. Listening & transcribing in real time...");
     } catch (err) {
-      console.error("Microphone access failed:", err);
+      console.error("[VoiceShield Mobile] Microphone initialization failed:", err);
       setSessionState("error");
-      setErrorMessage("Microphone permission denied or device unavailable. Please allow microphone access in your browser to enable live call protection.");
+      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+        setErrorMessage("Microphone permission was denied. Please allow microphone access in your browser settings to enable live call monitoring.");
+      } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+        setErrorMessage("No microphone was detected on this device. Please connect a microphone or verify device settings.");
+      } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
+        setErrorMessage("Microphone is currently in use by another application or phone call. Please close other audio apps and try again.");
+      } else if (err.message === "MEDIA_DEVICES_UNSUPPORTED") {
+        setErrorMessage("Your browser does not support microphone audio capture. Please open this page in Google Chrome, Safari, or an updated modern browser over HTTPS.");
+      } else {
+        setErrorMessage(`Microphone access failed: ${err.message || "Please check your browser permissions."}`);
+      }
     }
   };
 
@@ -1021,11 +1065,21 @@ ${
             <div className="text-center py-4">
               <button
                 type="button"
-                className="primary-execute-btn btn-large px-8 py-3.5 mx-auto"
+                className={`primary-execute-btn btn-large px-8 py-3.5 mx-auto ${sessionState === "starting" ? "opacity-75 cursor-not-allowed" : ""}`}
                 onClick={handleStartMonitoring}
+                disabled={sessionState === "starting"}
               >
-                <Radio size={18} className="text-white animate-pulse" />
-                <span className="text-sm font-bold">Start Live Call Monitoring</span>
+                {sessionState === "starting" ? (
+                  <>
+                    <Loader2 size={18} className="text-white animate-spin" />
+                    <span className="text-sm font-bold">Starting Microphone...</span>
+                  </>
+                ) : (
+                  <>
+                    <Radio size={18} className="text-white animate-pulse" />
+                    <span className="text-sm font-bold">Start Live Call Monitoring</span>
+                  </>
+                )}
               </button>
               <span className="text-2xs text-slate-500 block mt-2">
                 Clicking will request microphone permission and initiate real-time audio analysis.
