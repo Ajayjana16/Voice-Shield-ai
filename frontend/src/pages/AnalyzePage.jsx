@@ -363,7 +363,9 @@ export function AnalyzePage({ onNavigate }) {
         if (result.transcript && (!transcript || transcript.trim() === "")) {
           setTranscript(result.transcript);
         }
-        saveAnalysisRecord(result);
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("voiceshield:history_updated", { detail: result }));
+        }
       } else {
         // Context Text Only Analysis
         console.log("[AnalyzePage] Running text-based NLP scam classification on transcript length:", normalizedText.length);

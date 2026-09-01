@@ -746,7 +746,7 @@ export function LiveMonitorPage({ onNavigate }) {
         }
 
         setFinalReport(reportData);
-        saveAnalysisRecord(reportData);
+        await saveAnalysisRecord(reportData);
         addTimelineEvent("Session report finalized", "info");
       } else {
         // No speech captured at all during session

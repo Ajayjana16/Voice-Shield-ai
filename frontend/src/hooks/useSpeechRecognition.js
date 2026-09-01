@@ -8,17 +8,19 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
 
   const recognitionRef = useRef(null);
   const isRunningRef = useRef(false);
+  const isRestartingRef = useRef(false);
   const restartTimerRef = useRef(null);
+  const restartRetryCountRef = useRef(0);
+
+  // Persistent Text & Segment Accumulators across automatic recognition restarts
   const sessionBaseTextRef = useRef("");
-  const sessionSegmentsRef = useRef([]);
   const instanceFinalTextRef = useRef("");
   const instanceFinalizedMapRef = useRef(new Map());
-  const firstInterimLoggedRef = useRef(false);
-  const firstFinalLoggedRef = useRef(false);
-  const getTimestampRef = useRef(getTimestamp);
+  const sessionSegmentsRef = useRef([]);
 
   const onTranscriptRef = useRef(onTranscript);
   const onStatusChangeRef = useRef(onStatusChange);
+  const getTimestampRef = useRef(getTimestamp);
 
   useEffect(() => {
     onTranscriptRef.current = onTranscript;
@@ -44,6 +46,7 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
 
     recognition.onstart = () => {
       setIsListening(true);
+      restartRetryCountRef.current = 0;
       console.log(`[VoiceShield Debug] RECOGNITION_START at ${performance.now().toFixed(1)} ms`);
       if (window.__VOICE_SHIELD_TIMINGS__ && !window.__VOICE_SHIELD_TIMINGS__.T3) {
         const t3 = performance.now();
@@ -54,7 +57,7 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
     };
 
     recognition.onresult = (event) => {
-      let instanceFinal = "";
+      let currentInstanceFinal = "";
       let currentInterim = "";
       const currentInstanceSegments = [];
 
@@ -64,7 +67,7 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
         if (!text) continue;
 
         if (res.isFinal) {
-          instanceFinal += (instanceFinal ? " " : "") + text;
+          currentInstanceFinal += (currentInstanceFinal ? " " : "") + text;
           if (!instanceFinalizedMapRef.current.has(i)) {
             const timeStr = getTimestampRef.current ? getTimestampRef.current() : "00:00";
             instanceFinalizedMapRef.current.set(i, {
@@ -72,10 +75,6 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
               time: timeStr,
               text: text,
             });
-            if (!firstFinalLoggedRef.current) {
-              firstFinalLoggedRef.current = true;
-              console.log(`[VoiceShield Debug] FIRST_FINAL_RESULT: "${text}" at ${performance.now().toFixed(1)} ms [${timeStr}]`);
-            }
           }
           currentInstanceSegments.push(instanceFinalizedMapRef.current.get(i));
         } else {
@@ -83,13 +82,13 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
         }
       }
 
-      instanceFinalTextRef.current = instanceFinal;
+      instanceFinalTextRef.current = currentInstanceFinal;
 
-      // Merge base history with current instance
+      // Merge base history with current instance finalized + interim
       const fullConfirmed = (
         sessionBaseTextRef.current +
-        (sessionBaseTextRef.current && instanceFinal ? " " : "") +
-        instanceFinal
+        (sessionBaseTextRef.current && currentInstanceFinal ? " " : "") +
+        currentInstanceFinal
       ).trim();
 
       const fullTranscript = (
@@ -107,49 +106,19 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
       setInterimText(currentInterim);
       setSegments(allSegments);
 
-      if (currentInterim && !firstInterimLoggedRef.current) {
-        firstInterimLoggedRef.current = true;
-        console.log(`[VoiceShield Debug] FIRST_INTERIM_RESULT: "${currentInterim}" at ${performance.now().toFixed(1)} ms`);
-      }
-
-      // Latency instrumentation
-      if (currentInterim || instanceFinal) {
-        if (window.__VOICE_SHIELD_TIMINGS__ && !window.__VOICE_SHIELD_TIMINGS__.T4) {
-          const t4 = performance.now();
-          window.__VOICE_SHIELD_TIMINGS__.T4 = t4;
-          const t0 = window.__VOICE_SHIELD_TIMINGS__.T0 || t4;
-          const t1 = window.__VOICE_SHIELD_TIMINGS__.T1 || t4;
-          const t2 = window.__VOICE_SHIELD_TIMINGS__.T2 || t4;
-          const t3 = window.__VOICE_SHIELD_TIMINGS__.T3 || t4;
-
-          requestAnimationFrame(() => {
-            const t5 = performance.now();
-            window.__VOICE_SHIELD_TIMINGS__.T5 = t5;
-            console.log(`[VoiceShield Debug] TRANSCRIPT_RENDER at ${t5.toFixed(1)} ms`);
-            console.log(`========================================
-[VOICE SHIELD LATENCY AUDIT REPORT]
-• T1 - T0 (Mic Permission / Acquisition) : ${(t1 - t0).toFixed(1)} ms
-• T2 - T1 (Speech Recognition Launch)    : ${(t2 - t1).toFixed(1)} ms
-• T3 - T2 (Web Speech Engine Handshake)  : ${(t3 - t2).toFixed(1)} ms
-• T4 - T3 (Speech-to-First-Interim)      : ${(t4 - t3).toFixed(1)} ms
-• T5 - T4 (React State -> DOM Render)    : ${(t5 - t4).toFixed(1)} ms
-• Total T5 - T0 (Complete Startup Latency): ${(t5 - t0).toFixed(1)} ms
-========================================`);
-          });
-        }
-      }
-
       if (onTranscriptRef.current) {
         onTranscriptRef.current(fullTranscript, currentInterim, fullConfirmed);
       }
     };
 
     recognition.onerror = (event) => {
-      if (event.error === "no-speech" || event.error === "audio-capture") {
+      const err = event.error;
+      // Recoverable browser audio/speech events: do not kill the session
+      if (err === "no-speech" || err === "audio-capture" || err === "aborted" || err === "network") {
         return;
       }
-      console.warn("Speech recognition notice:", event.error);
-      if (event.error === "not-allowed") {
+      console.warn("Speech recognition notice:", err);
+      if (err === "not-allowed" || err === "service-not-allowed") {
         isRunningRef.current = false;
         setIsListening(false);
         if (onStatusChangeRef.current) onStatusChangeRef.current("permission_denied");
@@ -157,7 +126,7 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
     };
 
     recognition.onend = () => {
-      // Commit current instance final text and segments into base history before next instance
+      // 1. Commit finalized instance text and segments to persistent base
       if (instanceFinalTextRef.current) {
         sessionBaseTextRef.current = (
           sessionBaseTextRef.current +
@@ -174,21 +143,12 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
         instanceFinalizedMapRef.current.clear();
       }
 
+      // 2. Clear transient interim text
+      setInterimText("");
+
+      // 3. Auto-restart if monitoring remains active
       if (isRunningRef.current) {
-        if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-        restartTimerRef.current = setTimeout(() => {
-          if (isRunningRef.current) {
-            try {
-              const fresh = createRecognition();
-              if (fresh) {
-                recognitionRef.current = fresh;
-                fresh.start();
-              }
-            } catch (e) {
-              console.warn("Speech recognition restart retry:", e);
-            }
-          }
-        }, 50);
+        safeRestart();
       } else {
         setIsListening(false);
         if (onStatusChangeRef.current) onStatusChangeRef.current("stopped");
@@ -197,6 +157,53 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
 
     return recognition;
   }, []);
+
+  const safeRestart = useCallback(() => {
+    if (!isRunningRef.current) return;
+    if (restartTimerRef.current) {
+      clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = null;
+    }
+
+    if (isRestartingRef.current) return;
+    isRestartingRef.current = true;
+
+    restartTimerRef.current = setTimeout(() => {
+      isRestartingRef.current = false;
+      if (!isRunningRef.current) return;
+
+      try {
+        if (recognitionRef.current) {
+          try {
+            recognitionRef.current.onstart = null;
+            recognitionRef.current.onresult = null;
+            recognitionRef.current.onerror = null;
+            recognitionRef.current.onend = null;
+            recognitionRef.current.abort();
+          } catch {}
+          recognitionRef.current = null;
+        }
+
+        const fresh = createRecognition();
+        if (!fresh) return;
+
+        recognitionRef.current = fresh;
+        fresh.start();
+        restartRetryCountRef.current = 0;
+      } catch (e) {
+        console.warn("Speech recognition restart attempt failed:", e);
+        restartRetryCountRef.current += 1;
+        if (isRunningRef.current && restartRetryCountRef.current <= 10) {
+          const backoffMs = Math.min(1000, 80 * Math.pow(1.4, restartRetryCountRef.current));
+          restartTimerRef.current = setTimeout(() => {
+            if (isRunningRef.current) {
+              safeRestart();
+            }
+          }, backoffMs);
+        }
+      }
+    }, 60);
+  }, [createRecognition]);
 
   const start = useCallback(() => {
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -213,20 +220,26 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
       }
       if (recognitionRef.current) {
         try {
+          recognitionRef.current.onstart = null;
+          recognitionRef.current.onresult = null;
+          recognitionRef.current.onerror = null;
+          recognitionRef.current.onend = null;
           recognitionRef.current.abort();
         } catch {}
+        recognitionRef.current = null;
       }
 
+      // Wipe all previous session text completely
       sessionBaseTextRef.current = "";
       sessionSegmentsRef.current = [];
       instanceFinalTextRef.current = "";
       instanceFinalizedMapRef.current.clear();
-      firstInterimLoggedRef.current = false;
-      firstFinalLoggedRef.current = false;
       setConfirmedText("");
       setInterimText("");
       setSegments([]);
+
       isRunningRef.current = true;
+      restartRetryCountRef.current = 0;
 
       const recognition = createRecognition();
       if (!recognition) return;
@@ -248,7 +261,11 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
     }
     if (recognitionRef.current) {
       try {
-        recognitionRef.current.stop();
+        recognitionRef.current.onstart = null;
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onend = null;
+        recognitionRef.current.abort();
       } catch {}
       recognitionRef.current = null;
     }
@@ -279,8 +296,6 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
     sessionSegmentsRef.current = [];
     instanceFinalTextRef.current = "";
     instanceFinalizedMapRef.current.clear();
-    firstInterimLoggedRef.current = false;
-    firstFinalLoggedRef.current = false;
     setConfirmedText("");
     setInterimText("");
     setSegments([]);
@@ -300,8 +315,13 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
       if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
       if (recognitionRef.current) {
         try {
-          recognitionRef.current.stop();
+          recognitionRef.current.onstart = null;
+          recognitionRef.current.onresult = null;
+          recognitionRef.current.onerror = null;
+          recognitionRef.current.onend = null;
+          recognitionRef.current.abort();
         } catch {}
+        recognitionRef.current = null;
       }
     };
   }, []);

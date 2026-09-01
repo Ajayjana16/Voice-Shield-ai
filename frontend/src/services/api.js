@@ -110,6 +110,11 @@ export async function saveAnalysisRecord(payload) {
     const response = await apiClient.post(`/analysis/save`, payload, {
       timeout: DEFAULT_API_TIMEOUT,
     });
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("voiceshield:history_updated", { detail: payload })
+      );
+    }
     return response.data;
   } catch (err) {
     console.warn("Failed to persist analysis record to backend database:", err);

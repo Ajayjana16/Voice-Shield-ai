@@ -68,21 +68,58 @@ export function HistoryPage({ onNavigate }) {
 
   const [selectedAnalysis, setSelectedAnalysis] = useState(null);
 
-  useEffect(() => {
-    loadHistory();
-  }, []);
-
-  async function loadHistory() {
-    setLoading(true);
+  async function loadHistory(showLoading = true) {
+    if (showLoading) setLoading(true);
     try {
       const data = await fetchAnalysisHistory(50);
       setAnalyses(data || []);
     } catch {
-      setAnalyses([]);
+      if (showLoading) setAnalyses([]);
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }
+
+  useEffect(() => {
+    loadHistory(true);
+
+    const handleHistoryUpdated = (e) => {
+      const newRecord = e?.detail;
+      if (newRecord && newRecord.analysis_id) {
+        setAnalyses((prev) => {
+          const exists = prev.some((item) => item.analysis_id === newRecord.analysis_id);
+          if (exists) {
+            return prev.map((item) => (item.analysis_id === newRecord.analysis_id ? { ...item, ...newRecord } : item));
+          }
+          const formatted = {
+            analysis_id: newRecord.analysis_id,
+            created_at: newRecord.created_at || new Date().toISOString(),
+            analysis_status: newRecord.analysis_status || "completed",
+            risk_level: newRecord.risk_level || "LOW",
+            final_risk_score: newRecord.final_risk_score ?? 0,
+            prediction: newRecord.prediction || (newRecord.voice_authenticity === "HIGH_CONFIDENCE_SYNTHETIC" ? "SYNTHETIC" : "REAL"),
+            voice_authenticity: newRecord.voice_authenticity || "LIKELY_HUMAN",
+            possible_scam_category: newRecord.possible_scam_category || "Routine / Normal Call",
+            model_name: newRecord.model_name || "VoiceShield-Acoustic-v2",
+          };
+          return [formatted, ...prev];
+        });
+      }
+      loadHistory(false);
+    };
+
+    const handleWindowFocus = () => {
+      loadHistory(false);
+    };
+
+    window.addEventListener("voiceshield:history_updated", handleHistoryUpdated);
+    window.addEventListener("focus", handleWindowFocus);
+
+    return () => {
+      window.removeEventListener("voiceshield:history_updated", handleHistoryUpdated);
+      window.removeEventListener("focus", handleWindowFocus);
+    };
+  }, []);
 
   async function handleRowClick(analysisId) {
     try {

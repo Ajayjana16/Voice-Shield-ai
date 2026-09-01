@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 import json
 import sqlite3
 from pathlib import Path
@@ -8,7 +9,10 @@ from app.core.config import get_settings
 
 def _connect() -> sqlite3.Connection:
     settings = get_settings()
-    connection = sqlite3.connect(settings.database_path)
+    connection = sqlite3.connect(settings.database_path, timeout=15.0)
+    connection.execute("PRAGMA journal_mode=WAL;")
+    connection.execute("PRAGMA synchronous=NORMAL;")
+    connection.execute("PRAGMA busy_timeout=10000;")
     connection.row_factory = sqlite3.Row
     return connection
 
@@ -37,6 +41,12 @@ def init_db() -> None:
                 )
                 """
             )
+
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_analyses_created_at ON analyses (created_at DESC);
+            """
+        )
 
         connection.execute(
             """
