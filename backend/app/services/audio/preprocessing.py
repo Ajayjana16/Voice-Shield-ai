@@ -32,14 +32,14 @@ except ImportError:
 
 @dataclass(frozen=True)
 class AudioData:
-    samples: list[float]
+    samples: Any  # 1D numpy array (float32) or list[float]
     sample_rate: int | None
     duration_seconds: float
     byte_entropy: float
     digest: str
 
 
-def load_audio(path: Path | str) -> AudioData:
+def load_audio(path: Path | str, max_duration_sec: float = 180.0) -> AudioData:
     path = Path(path)
     data = path.read_bytes()
     digest = hashlib.sha256(data).hexdigest()
@@ -51,9 +51,14 @@ def load_audio(path: Path | str) -> AudioData:
             audio_arr, sr = sf.read(str(path), dtype="float32")
             if audio_arr.ndim > 1:
                 audio_arr = np.mean(audio_arr, axis=1)
-            samples = audio_arr.tolist()
-            duration = len(samples) / sr if sr else 0.0
-            return AudioData(samples, int(sr), duration, entropy, digest)
+            
+            # Bound duration to prevent OOM on massive audio files
+            max_samples = int(max_duration_sec * sr) if sr else len(audio_arr)
+            if len(audio_arr) > max_samples:
+                audio_arr = audio_arr[:max_samples]
+
+            duration = len(audio_arr) / sr if sr else 0.0
+            return AudioData(audio_arr, int(sr), duration, entropy, digest)
         except Exception:
             pass
 
@@ -63,30 +68,35 @@ def load_audio(path: Path | str) -> AudioData:
             sample_rate = wav.getframerate()
             sample_width = wav.getsampwidth()
             channels = wav.getnchannels()
-            frames = wav.readframes(wav.getnframes())
+            n_frames = min(wav.getnframes(), int(max_duration_sec * sample_rate))
+            frames = wav.readframes(n_frames)
             samples = _pcm_to_float(frames, sample_width, channels)
-            duration = len(samples) / sample_rate if sample_rate else 0.0
-            return AudioData(samples, sample_rate, duration, entropy, digest)
+            arr = np.array(samples, dtype=np.float32) if _HAS_NUMPY and np is not None else samples
+            duration = len(arr) / sample_rate if sample_rate else 0.0
+            return AudioData(arr, sample_rate, duration, entropy, digest)
     except (wave.Error, EOFError):
         pass
 
     # Strategy 3: byte stream fallback signal
     pseudo_samples = _bytes_to_signal(data)
-    duration = max(len(data) / 16000.0, 0.1)
-    return AudioData(pseudo_samples, None, duration, entropy, digest)
+    arr = np.array(pseudo_samples, dtype=np.float32) if _HAS_NUMPY and np is not None else pseudo_samples
+    duration = max(len(arr) / 16000.0, 0.1)
+    return AudioData(arr, 16000, duration, entropy, digest)
 
 
-def load_audio_resampled(path: Path, target_sr: int = 16000) -> tuple[Any, int]:
+def load_audio_resampled(path: Path | str, target_sr: int = 16000, max_duration_sec: float = 180.0) -> tuple[Any, int]:
     """
-    Loads audio from path as a 1D float32 numpy array resampled to target_sr (default 16000Hz).
-    Returns (samples_array, sample_rate).
+    Loads audio from path directly as a 1D float32 numpy array resampled to target_sr (default 16000Hz).
+    Avoids boxing millions of Python floats in memory.
     """
-    audio = load_audio(path)
-    sr = audio.sample_rate or 16000
-    samples = audio.samples
+    audio = load_audio(path, max_duration_sec=max_duration_sec)
+    sr = audio.sample_rate or target_sr
+    arr = audio.samples
 
     if _HAS_NUMPY and np is not None:
-        arr = np.array(samples, dtype=np.float32)
+        if not isinstance(arr, np.ndarray):
+            arr = np.array(arr, dtype=np.float32)
+
         if len(arr) == 0:
             return np.zeros(target_sr, dtype=np.float32), target_sr
 
@@ -100,13 +110,13 @@ def load_audio_resampled(path: Path, target_sr: int = 16000) -> tuple[Any, int]:
                 new_indices = np.linspace(0, len(arr) - 1, num_target_samples)
                 arr = np.interp(new_indices, orig_indices, arr).astype(np.float32)
 
-        # Normalize peak amplitude if necessary
+        # Normalize peak amplitude safely
         max_val = float(np.max(np.abs(arr))) if len(arr) > 0 else 0.0
         if max_val > 1.0:
             arr = arr / max_val
         return arr, target_sr
 
-    return samples, sr
+    return arr, sr
 
 
 def validate_speech_activity(
@@ -118,14 +128,6 @@ def validate_speech_activity(
     """
     Audio Validation & Speech Activity Gate (VAD).
     Determines if audio contains sufficient audible voiced human speech for trustworthy analysis.
-
-    Checks:
-    1. Duration >= min_duration_sec
-    2. Peak amplitude >= 0.015 (filters absolute silence & quantization noise)
-    3. RMS energy >= 0.0030 (filters dead air / background hiss)
-    4. Voiced speech frame accumulation (energy and zero-crossing analysis)
-
-    Returns: (is_valid_speech: bool, failure_or_success_reason: str, voiced_duration_sec: float)
     """
     if not _HAS_NUMPY or np is None or not isinstance(samples, np.ndarray):
         arr = np.array(samples, dtype=np.float32) if _HAS_NUMPY and np is not None else samples
@@ -163,12 +165,9 @@ def validate_speech_activity(
             start = i * frame_step
             frame = arr[start : start + frame_len]
             frame_rms = float(np.sqrt(np.mean(frame ** 2)))
-
-            # Zero-crossing rate within frame
             diff_signs = np.diff(np.signbit(frame))
             zcr = float(np.mean(diff_signs))
 
-            # Voiced human speech typically has moderate ZCR (<0.55) and frame energy > threshold
             if frame_rms >= energy_threshold and zcr < 0.55:
                 voiced_frames += 1
 
@@ -225,7 +224,7 @@ def slice_into_chunks(
 
 def extract_features(audio: AudioData) -> AcousticFeatures:
     samples = audio.samples
-    if not samples:
+    if samples is None or len(samples) == 0:
         return AcousticFeatures(
             duration_seconds=0,
             sample_rate=audio.sample_rate,
@@ -239,13 +238,24 @@ def extract_features(audio: AudioData) -> AcousticFeatures:
             byte_entropy=audio.byte_entropy,
         )
 
-    rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples))
-    zero_crossing_rate = _zero_crossing_rate(samples)
-    centroid = _spectral_centroid(samples, audio.sample_rate or 16000)
-    contrast = _dynamic_contrast(samples)
-    pitch = _estimate_pitch(samples, audio.sample_rate or 16000)
-    pause_ratio = _pause_ratio(samples)
-    dynamic_range = max(samples) - min(samples)
+    sr = audio.sample_rate or 16000
+
+    if _HAS_NUMPY and np is not None and isinstance(samples, np.ndarray):
+        rms = float(np.sqrt(np.mean(samples ** 2)))
+        zero_crossing_rate = float(np.mean(np.diff(np.signbit(samples)))) if len(samples) > 1 else 0.0
+        centroid = _spectral_centroid_np(samples, sr)
+        contrast = _dynamic_contrast_np(samples)
+        pitch = _estimate_pitch_np(samples, sr)
+        pause_ratio = _pause_ratio_np(samples, rms)
+        dynamic_range = float(np.max(samples) - np.min(samples))
+    else:
+        rms = math.sqrt(sum(sample * sample for sample in samples) / len(samples))
+        zero_crossing_rate = _zero_crossing_rate(samples)
+        centroid = _spectral_centroid(samples, sr)
+        contrast = _dynamic_contrast(samples)
+        pitch = _estimate_pitch(samples, sr)
+        pause_ratio = _pause_ratio(samples)
+        dynamic_range = max(samples) - min(samples)
 
     return AcousticFeatures(
         duration_seconds=round(audio.duration_seconds, 3),
@@ -260,6 +270,57 @@ def extract_features(audio: AudioData) -> AcousticFeatures:
         byte_entropy=round(audio.byte_entropy, 5),
     )
 
+
+# ─── Fast Vectorized Acoustic Feature Helpers ─────────────────────────────────
+
+def _spectral_centroid_np(samples: np.ndarray, sample_rate: int) -> float:
+    window = samples[: min(len(samples), 4096)]
+    if len(window) < 2:
+        return 0.0
+    magnitudes = np.abs(np.fft.rfft(window))
+    freqs = np.fft.rfftfreq(len(window), 1.0 / sample_rate)
+    total_mag = float(np.sum(magnitudes))
+    if total_mag == 0:
+        return 0.0
+    return float(np.sum(freqs * magnitudes) / total_mag)
+
+
+def _dynamic_contrast_np(samples: np.ndarray) -> float:
+    chunk_size = max(len(samples) // 20, 1)
+    n_chunks = len(samples) // chunk_size
+    if n_chunks == 0:
+        return 0.0
+    truncated = samples[: n_chunks * chunk_size].reshape(n_chunks, chunk_size)
+    energies = np.sqrt(np.mean(truncated ** 2, axis=1))
+    return float(np.max(energies) - np.min(energies))
+
+
+def _estimate_pitch_np(samples: np.ndarray, sample_rate: int) -> float:
+    if len(samples) < sample_rate // 20:
+        return 0.0
+    min_lag = max(sample_rate // 400, 1)
+    max_lag = max(sample_rate // 70, min_lag + 1)
+    segment = samples[: min(len(samples), sample_rate)]
+    
+    # Fast autocorrelation via numpy
+    corr = np.correlate(segment, segment, mode="full")
+    mid = len(segment) - 1
+    valid_corr = corr[mid + min_lag : mid + max_lag]
+    if len(valid_corr) == 0:
+        return 0.0
+    best_lag = min_lag + int(np.argmax(valid_corr))
+    return float(sample_rate / best_lag) if best_lag > 0 else 0.0
+
+
+def _pause_ratio_np(samples: np.ndarray, rms: float) -> float:
+    if len(samples) == 0:
+        return 1.0
+    threshold = max(0.015, rms * 0.25)
+    quiet_count = int(np.sum(np.abs(samples) < threshold))
+    return float(quiet_count / len(samples))
+
+
+# ─── Pure Python Fallback Helpers ─────────────────────────────────────────────
 
 def _pcm_to_float(frames: bytes, sample_width: int, channels: int) -> list[float]:
     if sample_width == 1:

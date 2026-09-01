@@ -138,6 +138,10 @@ def analyze_transcript_context(request: ContextRequest) -> ContextRiskResponse:
 
 
 
+import asyncio
+_analysis_semaphore = asyncio.Semaphore(1)
+
+
 @router.post("/audio/upload", response_model=AnalysisResponse)
 @router.post("/upload", response_model=AnalysisResponse)
 async def upload_audio(
@@ -145,7 +149,8 @@ async def upload_audio(
     transcript: str | None = Form(default=None),
     speaker_id: str | None = Form(default=None),
 ) -> AnalysisResponse:
-    return await _analyze_upload(file, transcript, speaker_id)
+    async with _analysis_semaphore:
+        return await _analyze_upload(file, transcript, speaker_id)
 
 
 @router.post("/audio/analyze", response_model=AnalysisResponse)
@@ -155,7 +160,8 @@ async def analyze_audio(
     transcript: str | None = Form(default=None),
     speaker_id: str | None = Form(default=None),
 ) -> AnalysisResponse:
-    return await _analyze_upload(file, transcript, speaker_id)
+    async with _analysis_semaphore:
+        return await _analyze_upload(file, transcript, speaker_id)
 
 
 @router.post("/audio/chunk", response_model=AnalysisResponse)
@@ -176,21 +182,22 @@ async def analyze_audio_chunk(
 
 @router.post("/stt/transcribe", response_model=SttResponse)
 async def transcribe(file: UploadFile = File(...)) -> SttResponse:
-    settings = get_settings()
-    path = settings.temp_audio_dir / f"stt_{uuid4().hex}_{_clean_filename(file.filename)}"
-    await _save_upload(file, path)
-    try:
-        response = transcribe_audio(path)
-    finally:
+    async with _analysis_semaphore:
+        settings = get_settings()
+        path = settings.temp_audio_dir / f"stt_{uuid4().hex}_{_clean_filename(file.filename)}"
+        await _save_upload(file, path)
         try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        try:
-            await file.close()
-        except Exception:
-            pass
-    return response
+            response = transcribe_audio(path)
+        finally:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            try:
+                await file.close()
+            except Exception:
+                pass
+        return response
 
 
 @router.post("/speaker/register")
