@@ -178,7 +178,8 @@ export function LiveMonitorPage({ onNavigate }) {
   // Live Analysis & Transcript State
   const [liveAnalysis, setLiveAnalysis] = useState(INITIAL_LIVE_ANALYSIS);
   const [transcript, setTranscript] = useState("");
-  const [transcriptSegments, setTranscriptSegments] = useState([]); // [{ time: '00:04', text: '...' }]
+  const [interimSpeech, setInterimSpeech] = useState("");
+  const [transcriptSegments, setTranscriptSegments] = useState([]); // [{ id: 'seg_1', time: '00:04', text: '...' }]
   const [timelineEvents, setTimelineEvents] = useState([]);
   const [timelineSortOrder, setTimelineSortOrder] = useState("newest"); // 'newest' | 'oldest'
   const [liveDeepfakeProb, setLiveDeepfakeProb] = useState(null);
@@ -410,25 +411,22 @@ export function LiveMonitorPage({ onNavigate }) {
 
   // Progressive Speech Recognition
   const speech = useSpeechRecognition({
-    onTranscript: (fullText, interimText) => {
+    onTranscript: (fullText, interimText, confirmedText, newlyFinalized) => {
       const activeRaw = (fullText || interimText || "").trim();
       setTranscript(fullText || interimText);
       liveTranscriptRef.current = fullText || interimText;
+      setInterimSpeech(interimText || "");
       if (activeRaw) {
         accumulatedTranscriptRef.current = activeRaw;
       }
 
-      // Append segment with timestamp
-      if (activeRaw.length > 0) {
+      // Append newly finalized sentence/phrase segment cleanly with timestamp
+      if (newlyFinalized && newlyFinalized.trim()) {
         const timeNow = getSessionTimestamp();
-        setTranscriptSegments((prev) => {
-          if (prev.length > 0 && prev[prev.length - 1].time === timeNow) {
-            const updated = [...prev];
-            updated[updated.length - 1] = { time: timeNow, text: activeRaw };
-            return updated;
-          }
-          return [...prev, { time: timeNow, text: activeRaw }];
-        });
+        setTranscriptSegments((prev) => [
+          ...prev,
+          { id: `seg_${Date.now()}_${prev.length}`, time: timeNow, text: newlyFinalized.trim() },
+        ]);
       }
 
       if (!speechDetectedLoggedRef.current && activeRaw.length > 0) {
@@ -553,12 +551,12 @@ export function LiveMonitorPage({ onNavigate }) {
   useEffect(() => {
     if (transcriptContainerRef.current) {
       const el = transcriptContainerRef.current;
-      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
       if (isNearBottom) {
         el.scrollTop = el.scrollHeight;
       }
     }
-  }, [transcript, transcriptSegments]);
+  }, [transcript, transcriptSegments, interimSpeech]);
 
   // Start Live Monitoring Session
   const handleStartMonitoring = async () => {
@@ -574,6 +572,7 @@ export function LiveMonitorPage({ onNavigate }) {
       accumulatedTranscriptRef.current = "";
 
       setTranscript("");
+      setInterimSpeech("");
       setTranscriptSegments([]);
       liveTranscriptRef.current = "";
       latestRequestIdRef.current = 0;
@@ -597,12 +596,8 @@ export function LiveMonitorPage({ onNavigate }) {
       setSessionState("monitoring");
       setStatusMessage("Continuous live call surveillance active. Listening & transcribing in real time...");
 
-      try {
-        speech.start();
-      } catch (e) {
-        console.warn("SpeechRecognition notice:", e);
-      }
-
+      // Start recognition and microphone recording in parallel
+      speech.start();
       await chunkRecorder.start();
       addTimelineEvent("Microphone connected", "info");
     } catch (err) {
@@ -1081,16 +1076,27 @@ ${
                 </div>
 
                 <div ref={transcriptContainerRef} className="max-h-48 overflow-y-auto pr-1 text-xs text-slate-800 leading-relaxed font-medium">
-                  {transcriptSegments.length > 0 ? (
+                  {transcriptSegments.length > 0 || interimSpeech ? (
                     <div className="space-y-1.5">
                       {transcriptSegments.map((seg, idx) => (
-                        <div key={idx} className="flex items-start gap-2">
+                        <div key={seg.id || idx} className="flex items-start gap-2">
                           <span className="text-2xs font-mono text-slate-400 mt-0.5 flex-shrink-0">
                             [{seg.time}]
                           </span>
                           <p className="break-words text-slate-800">{seg.text}</p>
                         </div>
                       ))}
+                      {interimSpeech && (
+                        <div className="flex items-start gap-2 text-blue-800 font-medium">
+                          <span className="text-2xs font-mono text-blue-500 mt-0.5 flex-shrink-0 animate-pulse">
+                            [{getSessionTimestamp()}]
+                          </span>
+                          <p className="break-words text-blue-900 italic">
+                            {interimSpeech}
+                            <span className="inline-block w-1.5 h-3 ml-1 bg-blue-600 animate-pulse align-middle" />
+                          </p>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <p className="text-xs text-slate-400 italic py-3">

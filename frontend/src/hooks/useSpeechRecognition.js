@@ -38,6 +38,7 @@ export function useSpeechRecognition({ onTranscript, onStatusChange }) {
   const recognitionRef = useRef(null);
   const isRunningRef = useRef(false);
   const accumulatedFinalRef = useRef("");
+  const restartTimerRef = useRef(null);
 
   const onTranscriptRef = useRef(onTranscript);
   const onStatusChangeRef = useRef(onStatusChange);
@@ -50,6 +51,96 @@ export function useSpeechRecognition({ onTranscript, onStatusChange }) {
     onStatusChangeRef.current = onStatusChange;
   }, [onStatusChange]);
 
+  const createRecognition = useCallback(() => {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) return null;
+
+    const recognition = new Recognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+    recognition.lang = navigator.language || "en-US";
+
+    recognition.onstart = () => {
+      setIsListening(true);
+      if (onStatusChangeRef.current) onStatusChangeRef.current("listening");
+    };
+
+    recognition.onresult = (event) => {
+      let currentInterim = "";
+      let newlyFinalized = "";
+
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        const trans = event.results[i][0]?.transcript || "";
+        if (event.results[i].isFinal) {
+          newlyFinalized += " " + trans;
+        } else {
+          currentInterim += " " + trans;
+        }
+      }
+
+      const trimmedFinal = newlyFinalized.trim();
+      if (trimmedFinal) {
+        accumulatedFinalRef.current = appendFinalSegment(accumulatedFinalRef.current, trimmedFinal);
+        setConfirmedText(accumulatedFinalRef.current);
+      }
+
+      const trimmedInterim = currentInterim.trim();
+      setInterimText(trimmedInterim);
+
+      const fullTranscript = accumulatedFinalRef.current
+        ? trimmedInterim
+          ? `${accumulatedFinalRef.current} ${trimmedInterim}`
+          : accumulatedFinalRef.current
+        : trimmedInterim;
+
+      if (onTranscriptRef.current) {
+        onTranscriptRef.current(fullTranscript, trimmedInterim, accumulatedFinalRef.current, trimmedFinal || null);
+      }
+    };
+
+    recognition.onerror = (event) => {
+      // Ignorable transient events
+      if (event.error === "no-speech" || event.error === "audio-capture") {
+        return;
+      }
+      console.warn("Speech recognition notice:", event.error);
+      if (event.error === "not-allowed") {
+        isRunningRef.current = false;
+        setIsListening(false);
+        if (onStatusChangeRef.current) onStatusChangeRef.current("permission_denied");
+      }
+    };
+
+    recognition.onend = () => {
+      if (isRunningRef.current) {
+        if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+        restartTimerRef.current = setTimeout(() => {
+          if (isRunningRef.current) {
+            try {
+              if (recognitionRef.current) {
+                recognitionRef.current.start();
+              }
+            } catch {
+              try {
+                const fresh = createRecognition();
+                if (fresh) {
+                  recognitionRef.current = fresh;
+                  fresh.start();
+                }
+              } catch {}
+            }
+          }
+        }, 50);
+      } else {
+        setIsListening(false);
+        if (onStatusChangeRef.current) onStatusChangeRef.current("stopped");
+      }
+    };
+
+    return recognition;
+  }, []);
+
   const start = useCallback(() => {
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Recognition) {
@@ -59,6 +150,10 @@ export function useSpeechRecognition({ onTranscript, onStatusChange }) {
     }
 
     try {
+      if (restartTimerRef.current) {
+        clearTimeout(restartTimerRef.current);
+        restartTimerRef.current = null;
+      }
       if (recognitionRef.current) {
         try {
           recognitionRef.current.abort();
@@ -68,73 +163,10 @@ export function useSpeechRecognition({ onTranscript, onStatusChange }) {
       accumulatedFinalRef.current = "";
       setConfirmedText("");
       setInterimText("");
+      isRunningRef.current = true;
 
-      const recognition = new Recognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.maxAlternatives = 1;
-      recognition.lang = "en-IN";
-
-      recognition.onstart = () => {
-        setIsListening(true);
-        isRunningRef.current = true;
-        if (onStatusChangeRef.current) onStatusChangeRef.current("listening");
-      };
-
-      recognition.onresult = (event) => {
-        let currentInterim = "";
-        let newFinal = "";
-
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          const trans = event.results[i][0]?.transcript || "";
-          if (event.results[i].isFinal) {
-            newFinal += " " + trans;
-          } else {
-            currentInterim += " " + trans;
-          }
-        }
-
-        if (newFinal.trim()) {
-          accumulatedFinalRef.current = appendFinalSegment(accumulatedFinalRef.current, newFinal);
-          setConfirmedText(accumulatedFinalRef.current);
-        }
-
-        const trimmedInterim = currentInterim.trim();
-        setInterimText(trimmedInterim);
-
-        const fullTranscript = accumulatedFinalRef.current
-          ? trimmedInterim
-            ? `${accumulatedFinalRef.current} ${trimmedInterim}`
-            : accumulatedFinalRef.current
-          : trimmedInterim;
-
-        if (onTranscriptRef.current) {
-          onTranscriptRef.current(fullTranscript, trimmedInterim, accumulatedFinalRef.current);
-        }
-      };
-
-      recognition.onerror = (event) => {
-        console.warn("Speech recognition notice:", event.error);
-        if (event.error === "not-allowed") {
-          setIsListening(false);
-          isRunningRef.current = false;
-          if (onStatusChangeRef.current) onStatusChangeRef.current("permission_denied");
-        }
-      };
-
-      recognition.onend = () => {
-        if (isRunningRef.current) {
-          try {
-            recognition.start();
-          } catch {
-            setIsListening(false);
-            isRunningRef.current = false;
-          }
-        } else {
-          setIsListening(false);
-          if (onStatusChangeRef.current) onStatusChangeRef.current("stopped");
-        }
-      };
+      const recognition = createRecognition();
+      if (!recognition) return;
 
       recognitionRef.current = recognition;
       recognition.start();
@@ -143,10 +175,14 @@ export function useSpeechRecognition({ onTranscript, onStatusChange }) {
       setIsListening(false);
       isRunningRef.current = false;
     }
-  }, []);
+  }, [createRecognition]);
 
   const stop = useCallback(() => {
     isRunningRef.current = false;
+    if (restartTimerRef.current) {
+      clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = null;
+    }
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
