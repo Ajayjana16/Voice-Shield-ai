@@ -8,5 +8,7 @@ joblib>=1.4.0
 numpy>=1.26.0
 scipy>=1.13.0
 soundfile>=0.12.1
+faster-whisper>=1.0.0
+av>=11.0.0
 httpx>=0.28.0
 pytest>=8.0.0

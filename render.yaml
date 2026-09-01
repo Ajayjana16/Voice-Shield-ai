@@ -8,6 +8,10 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      - key: STT_MODEL_SIZE
+        value: tiny.en
+      - key: STT_CPU_THREADS
+        value: "2"
       - key: VOICE_SHIELD_APP_NAME
         value: VOICE SHIELD AI
       - key: VOICE_SHIELD_FRONTEND_URL

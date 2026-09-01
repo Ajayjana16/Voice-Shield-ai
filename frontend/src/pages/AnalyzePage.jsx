@@ -234,25 +234,25 @@ export function AnalyzePage({ onNavigate }) {
 
     setIsProcessing(true);
     setProcessingStage(1);
-    setProcessingMessage("1/6 Uploading and ingesting audio stream...");
+    setProcessingMessage("1/7 Uploading audio...");
 
     try {
       if (file) {
         console.log("[AnalyzePage] Running multimodal forensic analysis on file:", file.name, "with transcript length:", normalizedText.length);
-        // Stage 1: Uploading & Ingestion
-        await new Promise((r) => setTimeout(r, 150));
+        // Stage 1: Uploading audio
+        await new Promise((r) => setTimeout(r, 120));
         setProcessingStage(2);
-        setProcessingMessage("2/6 Processing audio & extracting acoustic features...");
+        setProcessingMessage("2/7 Preparing audio & acoustic features...");
 
-        // Stage 2: Processing Audio & Acoustic Features
-        await new Promise((r) => setTimeout(r, 150));
+        // Stage 2: Preparing audio
+        await new Promise((r) => setTimeout(r, 120));
         setProcessingStage(3);
-        setProcessingMessage("3/6 Extracting and transcribing conversational speech...");
+        setProcessingMessage("3/7 Transcribing speech...");
 
-        // Stage 3: Speech Extraction
-        await new Promise((r) => setTimeout(r, 150));
+        // Stage 3: Transcribing speech
+        await new Promise((r) => setTimeout(r, 120));
         setProcessingStage(4);
-        setProcessingMessage("4/6 Running trained scam detection & social engineering intent model...");
+        setProcessingMessage("4/7 Analyzing conversation & social engineering intent...");
 
         // Stage 4: Scam Intelligence & Risk Fusion
         const result = await analyzeAudio({
@@ -264,12 +264,16 @@ export function AnalyzePage({ onNavigate }) {
         console.log("[AnalyzePage] Multimodal analysis API response:", result);
 
         setProcessingStage(5);
-        setProcessingMessage("5/6 Running voice authenticity & anti-spoofing analysis...");
-        await new Promise((r) => setTimeout(r, 150));
+        setProcessingMessage("5/7 Detecting voice authenticity & anti-spoofing...");
+        await new Promise((r) => setTimeout(r, 120));
 
         setProcessingStage(6);
-        setProcessingMessage("6/6 Finalizing comprehensive forensic assessment report...");
-        await new Promise((r) => setTimeout(r, 150));
+        setProcessingMessage("6/7 Calculating multi-signal risk score...");
+        await new Promise((r) => setTimeout(r, 120));
+
+        setProcessingStage(7);
+        setProcessingMessage("7/7 Finalizing forensic assessment report...");
+        await new Promise((r) => setTimeout(r, 120));
 
         setAnalysis(result);
         if (result.transcript && (!transcript || transcript.trim() === "")) {
@@ -279,14 +283,22 @@ export function AnalyzePage({ onNavigate }) {
         // Context Text Only Analysis
         console.log("[AnalyzePage] Running text-based NLP scam classification on transcript length:", normalizedText.length);
         setProcessingStage(2);
-        setProcessingMessage("2/6 Normalizing conversational linguistic content...");
-        await new Promise((r) => setTimeout(r, 150));
+        setProcessingMessage("2/7 Preparing conversational linguistic tokens...");
+        await new Promise((r) => setTimeout(r, 120));
 
         setProcessingStage(4);
-        setProcessingMessage("4/6 Running trained scam detection & intent classification...");
+        setProcessingMessage("4/7 Analyzing conversation & intent classification...");
 
         const result = await analyzeContext(normalizedText);
         console.log("[AnalyzePage] Text context analysis API response:", result);
+
+        setProcessingStage(6);
+        setProcessingMessage("6/7 Calculating conversational threat risk score...");
+        await new Promise((r) => setTimeout(r, 120));
+
+        setProcessingStage(7);
+        setProcessingMessage("7/7 Finalizing forensic assessment report...");
+        await new Promise((r) => setTimeout(r, 120));
 
         setProcessingStage(5);
         setProcessingMessage("5/6 Fusing conversational threat signals...");
@@ -725,42 +737,49 @@ ${
                   <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${processingStage >= 1 ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-600"}`}>
                     {processingStage > 1 ? <CheckCircle2 size={14} /> : "1"}
                   </div>
-                  <span className="text-xs font-semibold text-slate-800">1. Uploading &amp; ingesting audio stream</span>
+                  <span className="text-xs font-semibold text-slate-800">1. Uploading audio</span>
                 </div>
 
                 <div className="flex items-center gap-3">
                   <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${processingStage >= 2 ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-600"}`}>
                     {processingStage > 2 ? <CheckCircle2 size={14} /> : "2"}
                   </div>
-                  <span className="text-xs font-semibold text-slate-800">2. Processing audio &amp; extracting acoustic features</span>
+                  <span className="text-xs font-semibold text-slate-800">2. Preparing audio &amp; acoustic features</span>
                 </div>
 
                 <div className="flex items-center gap-3">
                   <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${processingStage >= 3 ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-600"}`}>
                     {processingStage > 3 ? <CheckCircle2 size={14} /> : "3"}
                   </div>
-                  <span className="text-xs font-semibold text-slate-800">3. Extracting and transcribing speech</span>
+                  <span className="text-xs font-semibold text-slate-800">3. Transcribing speech (Server-side Speech-to-Text)</span>
                 </div>
 
                 <div className="flex items-center gap-3">
                   <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${processingStage >= 4 ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-600"}`}>
                     {processingStage > 4 ? <CheckCircle2 size={14} /> : "4"}
                   </div>
-                  <span className="text-xs font-semibold text-slate-800">4. Running trained scam detection &amp; social engineering intent model</span>
+                  <span className="text-xs font-semibold text-slate-800">4. Analyzing conversation &amp; social engineering intent</span>
                 </div>
 
                 <div className="flex items-center gap-3">
                   <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${processingStage >= 5 ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-600"}`}>
                     {processingStage > 5 ? <CheckCircle2 size={14} /> : "5"}
                   </div>
-                  <span className="text-xs font-semibold text-slate-800">5. Running voice authenticity &amp; anti-spoofing analysis</span>
+                  <span className="text-xs font-semibold text-slate-800">5. Detecting voice authenticity &amp; anti-spoofing</span>
                 </div>
 
                 <div className="flex items-center gap-3">
                   <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${processingStage >= 6 ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-600"}`}>
-                    {processingStage >= 6 ? <CheckCircle2 size={14} /> : "6"}
+                    {processingStage > 6 ? <CheckCircle2 size={14} /> : "6"}
                   </div>
-                  <span className="text-xs font-semibold text-slate-800">6. Finalizing comprehensive forensic assessment report</span>
+                  <span className="text-xs font-semibold text-slate-800">6. Calculating multi-signal risk score</span>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${processingStage >= 7 ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-600"}`}>
+                    {processingStage > 7 ? <CheckCircle2 size={14} /> : "7"}
+                  </div>
+                  <span className="text-xs font-semibold text-slate-800">7. Finalizing forensic assessment report</span>
                 </div>
               </div>
             </div>
