@@ -427,16 +427,32 @@ export function AnalyzePage({ onNavigate }) {
         return;
       }
       console.error("[AnalyzePage] Forensic analysis request error:", err);
+
       if (err.code === "ECONNABORTED" || err.message?.toLowerCase().includes("timeout")) {
-        setErrorMessage("Audio analysis request timed out. The audio file may be large or complex. Please try again or provide the conversation transcript text directly.");
+        setErrorMessage("Audio analysis timed out. The file may be large or the server is busy. Please try again.");
       } else if (err.response) {
-        const errorDetail =
-          err.response.data?.detail ||
-          err.response.data?.message ||
-          `Server returned error ${err.response.status}`;
-        setErrorMessage(`Analysis failed: ${errorDetail}`);
+        const status = err.response.status;
+        const detail = err.response.data?.detail || err.response.data?.message;
+        if (status === 404) {
+          setErrorMessage(
+            "Analysis endpoint not found (404). The backend API URL is likely misconfigured. " +
+            "Check that VITE_API_BASE_URL is set correctly in your Vercel environment variables. " +
+            `Requested: ${err.config?.baseURL || ""}${err.config?.url || ""}`
+          );
+        } else if (status === 422) {
+          setErrorMessage(`Invalid request: ${detail || "The audio file format or size may not be supported."}`);
+        } else if (status === 500) {
+          setErrorMessage(`Server error during analysis (500). ${detail || "Please try again or use a different audio file."}`);
+        } else if (status === 503) {
+          setErrorMessage("Backend server is unavailable (503). The Render service may be starting up — please wait 30 seconds and try again.");
+        } else {
+          setErrorMessage(`Analysis failed (HTTP ${status}): ${detail || err.message}`);
+        }
       } else if (err.request) {
-        setErrorMessage("Unable to connect to the backend server. Please verify the backend is running on port 8000.");
+        setErrorMessage(
+          "Unable to reach the analysis server. This usually means VITE_API_BASE_URL is not set on Vercel, " +
+          "or the Render backend is offline. Check the browser console for the exact URL being called."
+        );
       } else {
         setErrorMessage(`Analysis request failed: ${err.message || "An unexpected error occurred."}`);
       }

@@ -1,8 +1,33 @@
 import axios from "axios";
 
-// Derive API and WebSocket URLs from Vite environment variables with local dev fallback
+// ─────────────────────────────────────────────────────────────────────────────
+// API URL Resolution
+//
+// Production (Vercel): Set VITE_API_BASE_URL in Vercel Dashboard → Settings →
+//   Environment Variables to your Render backend URL, e.g.:
+//   VITE_API_BASE_URL = https://voice-shield-ai-xxxx.onrender.com/api
+//
+// Development: Falls back to http://127.0.0.1:8000/api automatically.
+//
+// COMMON MISTAKE: If VITE_API_BASE_URL is NOT set in Vercel, the build will
+// bake in the localhost fallback and every API call will fail with 404/Network
+// Error in production (requests go to the user's own browser, not the server).
+// ─────────────────────────────────────────────────────────────────────────────
 const rawApiUrl = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000/api";
 export const API_BASE_URL = rawApiUrl.replace(/\/+$/, "");
+
+// Log the resolved base URL on startup so it is always visible in DevTools.
+const isLocalhost = API_BASE_URL.includes("127.0.0.1") || API_BASE_URL.includes("localhost");
+if (isLocalhost && !import.meta.env.DEV) {
+  console.error(
+    "[VoiceShield] ⚠️ PRODUCTION MISCONFIGURATION: VITE_API_BASE_URL is not set.\n" +
+    "All API calls will fail because the frontend is pointing at localhost instead of the\n" +
+    "Render backend. Set VITE_API_BASE_URL in Vercel Dashboard → Settings → Environment Variables.\n" +
+    "Expected value: https://<your-service>.onrender.com/api"
+  );
+} else {
+  console.log(`[VoiceShield] API Base URL: ${API_BASE_URL}`);
+}
 
 export const WS_URL =
   import.meta.env.VITE_WS_URL ||
@@ -14,12 +39,33 @@ export const WS_URL =
 export const AUDIO_PROCESSING_TIMEOUT = 180000; // 180 seconds (3 min) for heavy acoustic feature extraction, transcription & neural inference
 export const TEXT_PROCESSING_TIMEOUT = 45000;   // 45 seconds for NLP intent classification
 export const DEFAULT_API_TIMEOUT = 20000;       // 20 seconds for standard telemetry / history
-export const HEALTH_CHECK_TIMEOUT = 5000;       // 5 seconds for lightweight health checks
+export const HEALTH_CHECK_TIMEOUT = 8000;       // 8 seconds for health checks (Render may be slow to respond)
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: DEFAULT_API_TIMEOUT,
 });
+
+// ─── Request interceptor: log every outgoing request URL ────────────────────
+apiClient.interceptors.request.use((config) => {
+  const fullUrl = `${config.baseURL || API_BASE_URL}${config.url}`;
+  console.log(`[VoiceShield] → ${config.method?.toUpperCase()} ${fullUrl}`);
+  return config;
+});
+
+// ─── Response interceptor: log failures with full detail ────────────────────
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.config) {
+      const fullUrl = `${error.config.baseURL || API_BASE_URL}${error.config.url}`;
+      const status = error.response?.status ?? "NO_RESPONSE";
+      const msg = error.response?.data?.detail || error.response?.data?.message || error.message;
+      console.error(`[VoiceShield] ✗ ${error.config.method?.toUpperCase()} ${fullUrl} → ${status}: ${msg}`);
+    }
+    return Promise.reject(error);
+  }
+);
 
 export async function analyzeAudio({ file, transcript, speakerId, signal }) {
   const form = new FormData();
