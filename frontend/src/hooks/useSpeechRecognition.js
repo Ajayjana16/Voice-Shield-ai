@@ -1,44 +1,18 @@
 import { useRef, useState, useCallback, useEffect } from "react";
 
-function appendFinalSegment(existing, segment) {
-  const ex = (existing || "").trim();
-
-  const seg = (segment || "").trim();
-  if (!seg) return ex;
-  if (!ex) return seg;
-
-  // Exact duplicate check
-  if (ex.toLowerCase().endsWith(seg.toLowerCase())) return ex;
-
-  // Overlap deduplication at boundary
-  const wordsEx = ex.split(/\s+/);
-  const wordsSeg = seg.split(/\s+/);
-  let maxOverlap = 0;
-  const maxCheck = Math.min(wordsEx.length, wordsSeg.length, 6);
-
-  for (let k = 1; k <= maxCheck; k++) {
-    const endSlice = wordsEx.slice(wordsEx.length - k).join(" ").toLowerCase();
-    const startSlice = wordsSeg.slice(0, k).join(" ").toLowerCase();
-    if (endSlice === startSlice) {
-      maxOverlap = k;
-    }
-  }
-
-  if (maxOverlap > 0) {
-    const nonOverlapping = wordsSeg.slice(maxOverlap).join(" ");
-    return nonOverlapping ? `${ex} ${nonOverlapping}` : ex;
-  }
-  return `${ex} ${seg}`;
-}
-
-export function useSpeechRecognition({ onTranscript, onStatusChange }) {
+export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestamp }) {
   const [isListening, setIsListening] = useState(false);
   const [confirmedText, setConfirmedText] = useState("");
   const [interimText, setInterimText] = useState("");
+  const [segments, setSegments] = useState([]); // [{ id, time, text }]
+
   const recognitionRef = useRef(null);
   const isRunningRef = useRef(false);
-  const accumulatedFinalRef = useRef("");
   const restartTimerRef = useRef(null);
+  const sessionBaseTextRef = useRef("");
+  const sessionSegmentsRef = useRef([]);
+  const instanceFinalTextRef = useRef("");
+  const getTimestampRef = useRef(getTimestamp);
 
   const onTranscriptRef = useRef(onTranscript);
   const onStatusChangeRef = useRef(onStatusChange);
@@ -50,6 +24,10 @@ export function useSpeechRecognition({ onTranscript, onStatusChange }) {
   useEffect(() => {
     onStatusChangeRef.current = onStatusChange;
   }, [onStatusChange]);
+
+  useEffect(() => {
+    getTimestampRef.current = getTimestamp;
+  }, [getTimestamp]);
 
   const createRecognition = useCallback(() => {
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -72,28 +50,54 @@ export function useSpeechRecognition({ onTranscript, onStatusChange }) {
     };
 
     recognition.onresult = (event) => {
+      let instanceFinal = "";
       let currentInterim = "";
-      let newlyFinalized = "";
+      const currentInstanceSegments = [];
 
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        const trans = event.results[i][0]?.transcript || "";
-        if (event.results[i].isFinal) {
-          newlyFinalized += " " + trans;
+      for (let i = 0; i < event.results.length; ++i) {
+        const res = event.results[i];
+        const text = (res[0]?.transcript || "").trim();
+        if (!text) continue;
+
+        if (res.isFinal) {
+          instanceFinal += (instanceFinal ? " " : "") + text;
+          const timeStr = getTimestampRef.current ? getTimestampRef.current() : "00:00";
+          currentInstanceSegments.push({
+            id: `inst_seg_${i}_${text.substring(0, 10)}`,
+            time: timeStr,
+            text: text,
+          });
         } else {
-          currentInterim += " " + trans;
+          currentInterim += (currentInterim ? " " : "") + text;
         }
       }
 
-      const trimmedFinal = newlyFinalized.trim();
-      if (trimmedFinal) {
-        accumulatedFinalRef.current = appendFinalSegment(accumulatedFinalRef.current, trimmedFinal);
-        setConfirmedText(accumulatedFinalRef.current);
-      }
+      instanceFinalTextRef.current = instanceFinal;
 
-      const trimmedInterim = currentInterim.trim();
-      setInterimText(trimmedInterim);
+      // Merge base history with current instance
+      const fullConfirmed = (
+        sessionBaseTextRef.current +
+        (sessionBaseTextRef.current && instanceFinal ? " " : "") +
+        instanceFinal
+      ).trim();
 
-      if (trimmedInterim || trimmedFinal) {
+      const fullTranscript = (
+        fullConfirmed +
+        (fullConfirmed && currentInterim ? " " : "") +
+        currentInterim
+      ).trim();
+
+      const allSegments = [
+        ...sessionSegmentsRef.current,
+        ...currentInstanceSegments,
+      ];
+
+      setConfirmedText(fullConfirmed);
+      setInterimText(currentInterim);
+      setSegments(allSegments);
+
+      // Latency instrumentation
+      if (currentInterim || instanceFinal) {
         if (window.__VOICE_SHIELD_TIMINGS__ && !window.__VOICE_SHIELD_TIMINGS__.T4) {
           const t4 = performance.now();
           window.__VOICE_SHIELD_TIMINGS__.T4 = t4;
@@ -118,19 +122,12 @@ export function useSpeechRecognition({ onTranscript, onStatusChange }) {
         }
       }
 
-      const fullTranscript = accumulatedFinalRef.current
-        ? trimmedInterim
-          ? `${accumulatedFinalRef.current} ${trimmedInterim}`
-          : accumulatedFinalRef.current
-        : trimmedInterim;
-
       if (onTranscriptRef.current) {
-        onTranscriptRef.current(fullTranscript, trimmedInterim, accumulatedFinalRef.current, trimmedFinal || null);
+        onTranscriptRef.current(fullTranscript, currentInterim, fullConfirmed);
       }
     };
 
     recognition.onerror = (event) => {
-      // Ignorable transient events
       if (event.error === "no-speech" || event.error === "audio-capture") {
         return;
       }
@@ -143,22 +140,28 @@ export function useSpeechRecognition({ onTranscript, onStatusChange }) {
     };
 
     recognition.onend = () => {
+      // Commit current instance final text and segments into base history before next instance
+      if (instanceFinalTextRef.current) {
+        sessionBaseTextRef.current = (
+          sessionBaseTextRef.current +
+          (sessionBaseTextRef.current ? " " : "") +
+          instanceFinalTextRef.current
+        ).trim();
+        instanceFinalTextRef.current = "";
+      }
+
       if (isRunningRef.current) {
         if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
         restartTimerRef.current = setTimeout(() => {
           if (isRunningRef.current) {
             try {
-              if (recognitionRef.current) {
-                recognitionRef.current.start();
+              const fresh = createRecognition();
+              if (fresh) {
+                recognitionRef.current = fresh;
+                fresh.start();
               }
-            } catch {
-              try {
-                const fresh = createRecognition();
-                if (fresh) {
-                  recognitionRef.current = fresh;
-                  fresh.start();
-                }
-              } catch {}
+            } catch (e) {
+              console.warn("Speech recognition restart retry:", e);
             }
           }
         }, 50);
@@ -190,9 +193,12 @@ export function useSpeechRecognition({ onTranscript, onStatusChange }) {
         } catch {}
       }
 
-      accumulatedFinalRef.current = "";
+      sessionBaseTextRef.current = "";
+      sessionSegmentsRef.current = [];
+      instanceFinalTextRef.current = "";
       setConfirmedText("");
       setInterimText("");
+      setSegments([]);
       isRunningRef.current = true;
 
       const recognition = createRecognition();
@@ -220,29 +226,48 @@ export function useSpeechRecognition({ onTranscript, onStatusChange }) {
       recognitionRef.current = null;
     }
     setIsListening(false);
-    // Commit any remaining interim text into confirmed text before clearing interimText
+
+    // Commit any active interim text into confirmed segments on stop
     setInterimText((curInterim) => {
       if (curInterim && curInterim.trim()) {
-        accumulatedFinalRef.current = appendFinalSegment(accumulatedFinalRef.current, curInterim);
-        setConfirmedText(accumulatedFinalRef.current);
+        const timeStr = getTimestampRef.current ? getTimestampRef.current() : "00:00";
+        const finalTrimmed = curInterim.trim();
+        sessionBaseTextRef.current = (
+          sessionBaseTextRef.current +
+          (sessionBaseTextRef.current ? " " : "") +
+          finalTrimmed
+        ).trim();
+        setConfirmedText(sessionBaseTextRef.current);
+        setSegments((prev) => [
+          ...prev,
+          { id: `seg_end_${Date.now()}`, time: timeStr, text: finalTrimmed },
+        ]);
       }
       return "";
     });
   }, []);
 
   const reset = useCallback(() => {
-    accumulatedFinalRef.current = "";
+    sessionBaseTextRef.current = "";
+    sessionSegmentsRef.current = [];
+    instanceFinalTextRef.current = "";
     setConfirmedText("");
     setInterimText("");
+    setSegments([]);
   }, []);
 
   const getTranscript = useCallback(() => {
-    return accumulatedFinalRef.current || confirmedText || "";
+    return (
+      sessionBaseTextRef.current +
+      (sessionBaseTextRef.current && instanceFinalTextRef.current ? " " : "") +
+      instanceFinalTextRef.current
+    ).trim() || confirmedText || "";
   }, [confirmedText]);
 
   useEffect(() => {
     return () => {
       isRunningRef.current = false;
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
       if (recognitionRef.current) {
         try {
           recognitionRef.current.stop();
@@ -255,6 +280,7 @@ export function useSpeechRecognition({ onTranscript, onStatusChange }) {
     isListening,
     confirmedText,
     interimText,
+    segments,
     start,
     stop,
     reset,

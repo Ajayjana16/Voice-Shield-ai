@@ -173,13 +173,8 @@ export function LiveMonitorPage({ onNavigate }) {
 
   // Audio Device Selection
   const [audioDevices, setAudioDevices] = useState([]);
-  const [selectedDeviceId, setSelectedDeviceId] = useState("");
-
-  // Live Analysis & Transcript State
   const [liveAnalysis, setLiveAnalysis] = useState(INITIAL_LIVE_ANALYSIS);
   const [transcript, setTranscript] = useState("");
-  const [interimSpeech, setInterimSpeech] = useState("");
-  const [transcriptSegments, setTranscriptSegments] = useState([]); // [{ id: 'seg_1', time: '00:04', text: '...' }]
   const [timelineEvents, setTimelineEvents] = useState([]);
   const [timelineSortOrder, setTimelineSortOrder] = useState("newest"); // 'newest' | 'oldest'
   const [liveDeepfakeProb, setLiveDeepfakeProb] = useState(null);
@@ -411,22 +406,13 @@ export function LiveMonitorPage({ onNavigate }) {
 
   // Progressive Speech Recognition
   const speech = useSpeechRecognition({
-    onTranscript: (fullText, interimText, confirmedText, newlyFinalized) => {
+    getTimestamp: getSessionTimestamp,
+    onTranscript: (fullText, interimText, confirmedText) => {
       const activeRaw = (fullText || interimText || "").trim();
       setTranscript(fullText || interimText);
       liveTranscriptRef.current = fullText || interimText;
-      setInterimSpeech(interimText || "");
       if (activeRaw) {
         accumulatedTranscriptRef.current = activeRaw;
-      }
-
-      // Append newly finalized sentence/phrase segment cleanly with timestamp
-      if (newlyFinalized && newlyFinalized.trim()) {
-        const timeNow = getSessionTimestamp();
-        setTranscriptSegments((prev) => [
-          ...prev,
-          { id: `seg_${Date.now()}_${prev.length}`, time: timeNow, text: newlyFinalized.trim() },
-        ]);
       }
 
       if (!speechDetectedLoggedRef.current && activeRaw.length > 0) {
@@ -556,7 +542,7 @@ export function LiveMonitorPage({ onNavigate }) {
         el.scrollTop = el.scrollHeight;
       }
     }
-  }, [transcript, transcriptSegments, interimSpeech]);
+  }, [speech.segments, speech.interimText, transcript]);
 
   // Start Live Monitoring Session
   const handleStartMonitoring = async () => {
@@ -573,11 +559,7 @@ export function LiveMonitorPage({ onNavigate }) {
       highestThreatCategoryRef.current = "Routine / Normal Call";
       accumulatedThreatIndicatorsRef.current = [];
       accumulatedEvidenceRef.current = [];
-      accumulatedTranscriptRef.current = "";
-
       setTranscript("");
-      setInterimSpeech("");
-      setTranscriptSegments([]);
       liveTranscriptRef.current = "";
       latestRequestIdRef.current = 0;
       lastAppliedRequestIdRef.current = 0;
@@ -1100,9 +1082,9 @@ ${
                 </div>
 
                 <div ref={transcriptContainerRef} className="max-h-48 overflow-y-auto pr-1 text-xs text-slate-800 leading-relaxed font-medium">
-                  {transcriptSegments.length > 0 || interimSpeech ? (
+                  {(speech.segments && speech.segments.length > 0) || speech.interimText ? (
                     <div className="space-y-1.5">
-                      {transcriptSegments.map((seg, idx) => (
+                      {speech.segments.map((seg, idx) => (
                         <div key={seg.id || idx} className="flex items-start gap-2">
                           <span className="text-2xs font-mono text-slate-400 mt-0.5 flex-shrink-0">
                             [{seg.time}]
@@ -1110,13 +1092,13 @@ ${
                           <p className="break-words text-slate-800">{seg.text}</p>
                         </div>
                       ))}
-                      {interimSpeech && (
+                      {speech.interimText && (
                         <div className="flex items-start gap-2 text-blue-800 font-medium">
                           <span className="text-2xs font-mono text-blue-500 mt-0.5 flex-shrink-0 animate-pulse">
                             [{getSessionTimestamp()}]
                           </span>
                           <p className="break-words text-blue-900 italic">
-                            {interimSpeech}
+                            {speech.interimText}
                             <span className="inline-block w-1.5 h-3 ml-1 bg-blue-600 animate-pulse align-middle" />
                           </p>
                         </div>
