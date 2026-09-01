@@ -1,3 +1,6 @@
+import concurrent.futures
+import logging
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -19,6 +22,8 @@ from app.services.speaker.verification import extract_speaker_embedding, verify_
 from app.services.stt.social_engineering import analyze_context_detailed, infer_scam_category
 from app.services.stt.transcriber import transcribe_audio
 
+logger = logging.getLogger(__name__)
+
 
 def analyze_audio_file(
     path: Path,
@@ -26,17 +31,23 @@ def analyze_audio_file(
     reference_embedding: list[float] | None = None,
     is_chunk: bool = False,
 ) -> AnalysisResponse:
-    # 1. Acoustic Loading & Feature Extraction
+    t_start = time.perf_counter()
+
+    # 1. Acoustic Loading & Audio Preparation (Single in-memory pass)
+    t0_audio = time.perf_counter()
     audio = load_audio(path)
     features = extract_features(audio)
+    samples, sr = load_audio_resampled(path, target_sr=16000)
+    audio_prep_ms = (time.perf_counter() - t0_audio) * 1000
 
     # 2. AUDIO VALIDATION / SPEECH ACTIVITY GATE (VAD)
-    samples, sr = load_audio_resampled(path, target_sr=16000)
+    t0_vad = time.perf_counter()
     min_dur = 0.25 if is_chunk else 0.35
     min_voiced = 0.12 if is_chunk else 0.18
     is_speech, reason, _ = validate_speech_activity(
         samples, sr, min_duration_sec=min_dur, min_voiced_duration_sec=min_voiced
     )
+    vad_ms = (time.perf_counter() - t0_vad) * 1000
 
     if not is_speech:
         # DO NOT run the threat scoring pipeline on silent or near-silent audio.
@@ -80,8 +91,31 @@ def analyze_audio_file(
             store.save_analysis(response.model_dump())
         return response
 
-    # 3. Deepfake / Synthetic Voice Detection (Independent Signal)
-    df_result = detect_synthetic_voice_detailed(features, path)
+    # 3 & 4. Run Independent Acoustic/Deepfake & STT Transcription Concurrently
+    def _run_acoustic_branch():
+        t0 = time.perf_counter()
+        df_res = detect_synthetic_voice_detailed(features, path)
+        prosody_sc, prosody_rs = prosody_anomaly_score(features)
+        ms = (time.perf_counter() - t0) * 1000
+        return df_res, prosody_sc, prosody_rs, ms
+
+    def _run_stt_branch():
+        t0 = time.perf_counter()
+        eff_tx = transcript
+        if not eff_tx or not eff_tx.strip():
+            stt_res = transcribe_audio(path=path, samples=samples)
+            if stt_res.transcript and stt_res.transcript.strip():
+                eff_tx = stt_res.transcript.strip()
+        ms = (time.perf_counter() - t0) * 1000
+        return eff_tx, ms
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        future_acoustic = executor.submit(_run_acoustic_branch)
+        future_stt = executor.submit(_run_stt_branch)
+
+        df_result, prosody_score, prosody_reasons, acoustic_ms = future_acoustic.result()
+        effective_transcript, stt_ms = future_stt.result()
+
     deepfake_probability = df_result.synthetic_probability
     duration = features.duration_seconds or 0.0
 
@@ -111,19 +145,8 @@ def analyze_audio_file(
         is_synthetic = False
         deepfake_probability = min(deepfake_probability, 0.08)
 
-
-
-    # 4. Prosody Anomaly Analysis (Independent Signal)
-    prosody_score, prosody_reasons = prosody_anomaly_score(features)
-
-    # 5. Speech-to-Text & Conversation Scam Intent Analysis
-    effective_transcript = transcript
-    if not effective_transcript or not effective_transcript.strip():
-        # Attempt automatic server-side transcription
-        stt_resp = transcribe_audio(path)
-        if stt_resp.transcript and stt_resp.transcript.strip():
-            effective_transcript = stt_resp.transcript.strip()
-
+    # 5. NLP Scam Intent Analysis on Generated/Provided Transcript
+    t0_nlp = time.perf_counter()
     has_transcript = bool(effective_transcript and effective_transcript.strip())
     
     if has_transcript:
@@ -143,6 +166,7 @@ def analyze_audio_file(
         possible_category = "Conversation Analysis Not Available"
         category_confidence = "UNCERTAIN"
         category_desc = "Voice audio was analyzed, but spoken conversation content could not be reliably transcribed. Scam detection based on call content was not completed."
+    nlp_ms = (time.perf_counter() - t0_nlp) * 1000
 
     # 6. Speaker Biometric Verification (Optional / Enterprise)
     speaker_match_score = None
@@ -161,6 +185,7 @@ def analyze_audio_file(
         speaker_mismatch = spk_result.speaker_mismatch
 
     # 7. Security-Aware Risk Fusion Engine
+    t0_risk = time.perf_counter()
     final_score, risk_level, recommendation, breakdown = calculate_risk_detailed(
         deepfake_probability=deepfake_probability,
         prosody_score=prosody_score,
@@ -170,6 +195,7 @@ def analyze_audio_file(
         detected_indicators=detected_scam_indicators,
         has_transcript=has_transcript,
     )
+    risk_ms = (time.perf_counter() - t0_risk) * 1000
 
     # 8. Threat Indicators & Evidence Assembly
     indicators = _build_indicators(
@@ -181,6 +207,14 @@ def analyze_audio_file(
         duration=duration,
         is_chunk=is_chunk,
     )
+
+    total_ms = (time.perf_counter() - t_start) * 1000
+    logger.info(
+        f"[PERF] Pipeline Completed in {total_ms:.1f}ms "
+        f"(AudioPrep={audio_prep_ms:.1f}ms, VAD={vad_ms:.1f}ms, STT={stt_ms:.1f}ms, "
+        f"Acoustics={acoustic_ms:.1f}ms, NLP={nlp_ms:.1f}ms, RiskFusion={risk_ms:.1f}ms)"
+    )
+
     detected_threats = [
         indicator.label for indicator in indicators if indicator.severity in {"MEDIUM", "HIGH", "CRITICAL"}
     ]
@@ -216,7 +250,7 @@ def analyze_audio_file(
         transcript=effective_transcript,
         created_at=datetime.now(UTC).isoformat(),
         model_name=df_result.model_name,
-        inference_time_ms=df_result.inference_time_ms,
+        inference_time_ms=round(total_ms, 2),
         fallback_used=df_result.fallback_used,
         risk_breakdown=breakdown,
     )

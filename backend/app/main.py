@@ -5,6 +5,7 @@ from app.api.routes import router
 from app.core.config import Settings, get_settings
 from app.db.store import init_db
 from app.services.detection.scam_classifier import get_model_bundle
+from app.services.stt.transcriber import preload_and_warmup_stt
 
 
 def get_cors_origins(settings: Settings) -> list[str]:
@@ -34,6 +35,8 @@ def create_app() -> FastAPI:
     init_db()
     # Preload trained NLP scam classification model on startup
     get_model_bundle()
+    # Preload and warm up faster-whisper STT on startup
+    preload_and_warmup_stt()
 
     app = FastAPI(title=settings.app_name, version="0.1.0")
     cors_origins = get_cors_origins(settings)

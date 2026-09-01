@@ -79,6 +79,10 @@ export function AnalyzePage({ onNavigate }) {
   const audioRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
 
+  // Stale Request Invalidation & Abort Control
+  const activeRequestIdRef = useRef(0);
+  const abortControllerRef = useRef(null);
+
   // Sync audio URL when file changes
   useEffect(() => {
     if (file) {
@@ -111,8 +115,13 @@ export function AnalyzePage({ onNavigate }) {
     }
   };
 
-  // Reset entire workspace
+  // Reset entire workspace back to initial pristine state
   const handleReset = () => {
+    activeRequestIdRef.current += 1;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
     setFile(null);
     setAudioUrl(null);
     setAudioDuration(null);
@@ -126,12 +135,49 @@ export function AnalyzePage({ onNavigate }) {
     setIsPlaying(false);
   };
 
-  // Validate Audio File Format & Size
+  // Remove current audio recording and clear results immediately
+  const handleRemoveFile = () => {
+    activeRequestIdRef.current += 1;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setFile(null);
+    setAudioUrl(null);
+    setAudioDuration(null);
+    setTranscript("");
+    setAnalysis(null);
+    setErrorMessage(null);
+    setIsProcessing(false);
+    setProcessingStage(0);
+    setProcessingMessage("");
+    setIsPlaying(false);
+  };
+
+  // Validate Audio File Format & Size with immediate state wipe
   const validateAndSetAudioFile = (selectedFile) => {
     if (!selectedFile) return;
+
+    // 1. Cancel any active requests immediately
+    activeRequestIdRef.current += 1;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+
+    // 2. Clear ALL old transcript and analysis results immediately
+    setTranscript("");
+    setAnalysis(null);
+    setErrorMessage(null);
+    setIsProcessing(false);
+    setProcessingStage(0);
+    setProcessingMessage("");
+    setIsPlaying(false);
+
     const MAX_SIZE = 50 * 1024 * 1024; // 50 MB
     if (selectedFile.size > MAX_SIZE) {
       setErrorMessage("File size exceeds the 50 MB limit. Please select a smaller recording.");
+      setFile(null);
       return;
     }
     const validExtensions = [".wav", ".mp3", ".m4a", ".flac", ".ogg", ".webm", ".aac", ".aiff"];
@@ -141,11 +187,11 @@ export function AnalyzePage({ onNavigate }) {
 
     if (!hasValidExt && !isAudioMime) {
       setErrorMessage("Unsupported audio format. Supported formats: WAV, MP3, M4A, FLAC, OGG, WEBM.");
+      setFile(null);
       return;
     }
 
     setFile(selectedFile);
-    setErrorMessage(null);
   };
 
   // File Drop Handlers
@@ -185,11 +231,26 @@ export function AnalyzePage({ onNavigate }) {
       setErrorMessage("Please attach an audio recording first.");
       return;
     }
+
+    activeRequestIdRef.current += 1;
+    const currentReqId = activeRequestIdRef.current;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       setIsProcessing(true);
       setProcessingMessage("Transcribing audio through Speech-to-Text engine...");
       console.log("[AnalyzePage] Calling STT transcribe for file:", file.name, "Size:", file.size);
-      const result = await transcribeAudio(file);
+      const result = await transcribeAudio(file, { signal: controller.signal });
+
+      if (currentReqId !== activeRequestIdRef.current) {
+        console.log("[AnalyzePage] Stale STT response ignored for request ID:", currentReqId);
+        return;
+      }
+
       console.log("[AnalyzePage] STT response:", result);
       if (result.transcript && result.transcript.trim()) {
         setTranscript(result.transcript);
@@ -202,6 +263,9 @@ export function AnalyzePage({ onNavigate }) {
       setIsProcessing(false);
       setProcessingMessage("");
     } catch (err) {
+      if (currentReqId !== activeRequestIdRef.current || err.name === "CanceledError" || err.name === "AbortError") {
+        return;
+      }
       console.error("[AnalyzePage] STT extraction error:", err);
       setIsProcessing(false);
       setProcessingMessage("");
@@ -232,6 +296,14 @@ export function AnalyzePage({ onNavigate }) {
       return;
     }
 
+    activeRequestIdRef.current += 1;
+    const currentReqId = activeRequestIdRef.current;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setIsProcessing(true);
     setProcessingStage(1);
     setProcessingMessage("1/7 Uploading audio...");
@@ -240,17 +312,20 @@ export function AnalyzePage({ onNavigate }) {
       if (file) {
         console.log("[AnalyzePage] Running multimodal forensic analysis on file:", file.name, "with transcript length:", normalizedText.length);
         // Stage 1: Uploading audio
-        await new Promise((r) => setTimeout(r, 120));
+        await new Promise((r) => setTimeout(r, 60));
+        if (currentReqId !== activeRequestIdRef.current) return;
         setProcessingStage(2);
         setProcessingMessage("2/7 Preparing audio & acoustic features...");
 
         // Stage 2: Preparing audio
-        await new Promise((r) => setTimeout(r, 120));
+        await new Promise((r) => setTimeout(r, 60));
+        if (currentReqId !== activeRequestIdRef.current) return;
         setProcessingStage(3);
-        setProcessingMessage("3/7 Transcribing speech...");
+        setProcessingMessage("3/7 Transcribing speech (Server-side STT)...");
 
         // Stage 3: Transcribing speech
-        await new Promise((r) => setTimeout(r, 120));
+        await new Promise((r) => setTimeout(r, 60));
+        if (currentReqId !== activeRequestIdRef.current) return;
         setProcessingStage(4);
         setProcessingMessage("4/7 Analyzing conversation & social engineering intent...");
 
@@ -259,54 +334,61 @@ export function AnalyzePage({ onNavigate }) {
           file: file,
           transcript: normalizedText || undefined,
           speakerId: speakerId.trim() || undefined,
+          signal: controller.signal,
         });
+
+        if (currentReqId !== activeRequestIdRef.current) {
+          console.log("[AnalyzePage] Stale analysis response dropped for request ID:", currentReqId);
+          return;
+        }
 
         console.log("[AnalyzePage] Multimodal analysis API response:", result);
 
         setProcessingStage(5);
         setProcessingMessage("5/7 Detecting voice authenticity & anti-spoofing...");
-        await new Promise((r) => setTimeout(r, 120));
+        await new Promise((r) => setTimeout(r, 60));
+        if (currentReqId !== activeRequestIdRef.current) return;
 
         setProcessingStage(6);
         setProcessingMessage("6/7 Calculating multi-signal risk score...");
-        await new Promise((r) => setTimeout(r, 120));
+        await new Promise((r) => setTimeout(r, 60));
+        if (currentReqId !== activeRequestIdRef.current) return;
 
         setProcessingStage(7);
         setProcessingMessage("7/7 Finalizing forensic assessment report...");
-        await new Promise((r) => setTimeout(r, 120));
+        await new Promise((r) => setTimeout(r, 60));
+        if (currentReqId !== activeRequestIdRef.current) return;
 
         setAnalysis(result);
         if (result.transcript && (!transcript || transcript.trim() === "")) {
           setTranscript(result.transcript);
         }
+        saveAnalysisRecord(result);
       } else {
         // Context Text Only Analysis
         console.log("[AnalyzePage] Running text-based NLP scam classification on transcript length:", normalizedText.length);
         setProcessingStage(2);
         setProcessingMessage("2/7 Preparing conversational linguistic tokens...");
-        await new Promise((r) => setTimeout(r, 120));
+        await new Promise((r) => setTimeout(r, 60));
+        if (currentReqId !== activeRequestIdRef.current) return;
 
         setProcessingStage(4);
         setProcessingMessage("4/7 Analyzing conversation & intent classification...");
 
-        const result = await analyzeContext(normalizedText);
+        const result = await analyzeContext(normalizedText, { signal: controller.signal });
+        if (currentReqId !== activeRequestIdRef.current) return;
+
         console.log("[AnalyzePage] Text context analysis API response:", result);
 
         setProcessingStage(6);
         setProcessingMessage("6/7 Calculating conversational threat risk score...");
-        await new Promise((r) => setTimeout(r, 120));
+        await new Promise((r) => setTimeout(r, 60));
+        if (currentReqId !== activeRequestIdRef.current) return;
 
         setProcessingStage(7);
         setProcessingMessage("7/7 Finalizing forensic assessment report...");
-        await new Promise((r) => setTimeout(r, 120));
-
-        setProcessingStage(5);
-        setProcessingMessage("5/6 Fusing conversational threat signals...");
-        await new Promise((r) => setTimeout(r, 150));
-
-        setProcessingStage(6);
-        setProcessingMessage("6/6 Finalizing comprehensive forensic assessment report...");
-        await new Promise((r) => setTimeout(r, 150));
+        await new Promise((r) => setTimeout(r, 60));
+        if (currentReqId !== activeRequestIdRef.current) return;
 
         const finalScore = result.final_risk_score ?? result.context_risk_score ?? 0;
         const indicators = result.detected_indicators || [];
@@ -339,6 +421,9 @@ export function AnalyzePage({ onNavigate }) {
         saveAnalysisRecord(reportObj);
       }
     } catch (err) {
+      if (currentReqId !== activeRequestIdRef.current || err.name === "CanceledError" || err.name === "AbortError") {
+        return;
+      }
       console.error("[AnalyzePage] Forensic analysis request error:", err);
       if (err.code === "ECONNABORTED" || err.message?.toLowerCase().includes("timeout")) {
         setErrorMessage("Audio analysis request timed out. The audio file may be large or complex. Please try again or provide the conversation transcript text directly.");
@@ -354,9 +439,11 @@ export function AnalyzePage({ onNavigate }) {
         setErrorMessage(`Analysis request failed: ${err.message || "An unexpected error occurred."}`);
       }
     } finally {
-      setIsProcessing(false);
-      setProcessingStage(0);
-      setProcessingMessage("");
+      if (currentReqId === activeRequestIdRef.current) {
+        setIsProcessing(false);
+        setProcessingStage(0);
+        setProcessingMessage("");
+      }
     }
   };
 
@@ -523,7 +610,7 @@ ${
                     </div>
                     <button
                       className="remove-file-btn text-slate-400 hover:text-red-600"
-                      onClick={() => setFile(null)}
+                      onClick={handleRemoveFile}
                       title="Remove file"
                     >
                       <Trash2 size={16} />

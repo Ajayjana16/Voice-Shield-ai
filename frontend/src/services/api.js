@@ -21,40 +21,44 @@ const apiClient = axios.create({
   timeout: DEFAULT_API_TIMEOUT,
 });
 
-export async function analyzeAudio({ file, transcript, speakerId }) {
+export async function analyzeAudio({ file, transcript, speakerId, signal }) {
   const form = new FormData();
   if (file) form.append("file", file);
   if (transcript) form.append("transcript", transcript);
   if (speakerId) form.append("speaker_id", speakerId);
   const response = await apiClient.post(`/audio/analyze`, form, {
     timeout: AUDIO_PROCESSING_TIMEOUT,
+    signal: signal,
     headers: { "Content-Type": "multipart/form-data" },
   });
   return response.data;
 }
 
-export async function analyzeChunk({ file, transcript, speakerId }) {
+export async function analyzeChunk({ file, transcript, speakerId, signal }) {
   const form = new FormData();
   if (file) form.append("file", file);
   if (transcript) form.append("transcript", transcript);
   if (speakerId) form.append("speaker_id", speakerId);
   const response = await apiClient.post(`/audio/chunk`, form, {
     timeout: 30000,
+    signal: signal,
     headers: { "Content-Type": "multipart/form-data" },
   });
   return response.data;
 }
 
-export async function analyzeContext(transcript) {
+export async function analyzeContext(transcript, { signal } = {}) {
   const response = await apiClient.post(`/context/analyze`, { transcript }, {
     timeout: TEXT_PROCESSING_TIMEOUT,
+    signal: signal,
   });
   return response.data;
 }
 
-export async function classifyScam(transcript) {
+export async function classifyScam(transcript, { signal } = {}) {
   const response = await apiClient.post(`/scam/classify`, { transcript }, {
     timeout: TEXT_PROCESSING_TIMEOUT,
+    signal: signal,
   });
   return response.data;
 }
@@ -75,11 +79,12 @@ export async function fetchSingleAnalysis(analysisId) {
 
 export const fetchAnalysisById = fetchSingleAnalysis;
 
-export async function transcribeAudio(file) {
+export async function transcribeAudio(file, { signal } = {}) {
   const form = new FormData();
   if (file) form.append("file", file);
   const response = await apiClient.post(`/stt/transcribe`, form, {
     timeout: AUDIO_PROCESSING_TIMEOUT,
+    signal: signal,
     headers: { "Content-Type": "multipart/form-data" },
   });
   return response.data;
