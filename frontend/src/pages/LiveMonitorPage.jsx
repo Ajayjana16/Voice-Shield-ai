@@ -560,6 +560,10 @@ export function LiveMonitorPage({ onNavigate }) {
 
   // Start Live Monitoring Session
   const handleStartMonitoring = async () => {
+    const t0 = performance.now();
+    window.__VOICE_SHIELD_TIMINGS__ = { T0: t0, T1: 0, T2: 0, T3: 0, T4: 0, T5: 0 };
+    console.log("[Latency Audit] T0: Start Live Monitoring clicked");
+
     try {
       setErrorMessage(null);
       setFinalReport(null);
@@ -596,10 +600,30 @@ export function LiveMonitorPage({ onNavigate }) {
       setSessionState("monitoring");
       setStatusMessage("Continuous live call surveillance active. Listening & transcribing in real time...");
 
-      // Start recognition and microphone recording in parallel
+      // 1. Acquire single microphone media stream
+      const micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      const t1 = performance.now();
+      window.__VOICE_SHIELD_TIMINGS__.T1 = t1;
+      console.log(`[Latency Audit] T1: Mic permission granted in ${(t1 - t0).toFixed(1)} ms`);
+
+      // 2. Start SpeechRecognition IMMEDIATELY
+      const t2 = performance.now();
+      window.__VOICE_SHIELD_TIMINGS__.T2 = t2;
       speech.start();
-      await chunkRecorder.start();
-      addTimelineEvent("Microphone connected", "info");
+      console.log(`[Latency Audit] T2: speech.start() dispatched in ${(t2 - t1).toFixed(1)} ms`);
+
+      // 3. Hand stream asynchronously to chunkRecorder (VAD + waveform + 2s rolling chunks)
+      chunkRecorder.start(micStream).then(() => {
+        addTimelineEvent("Microphone connected", "info");
+      }).catch((err) => {
+        console.warn("Secondary audio analyzer startup notice:", err);
+      });
     } catch (err) {
       console.error("Microphone access failed:", err);
       setSessionState("error");

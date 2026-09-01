@@ -65,16 +65,16 @@ export function useChunkRecorder({ onChunk }) {
 
   const sessionStartTimeRef = useRef(null);
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (existingStream) => {
     try {
       accumulatedChunksRef.current = [];
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const stream = existingStream || (await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
         },
-      });
+      }));
 
       streamRef.current = stream;
       startAudioAnalysis(stream);

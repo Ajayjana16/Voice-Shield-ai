@@ -63,6 +63,11 @@ export function useSpeechRecognition({ onTranscript, onStatusChange }) {
 
     recognition.onstart = () => {
       setIsListening(true);
+      if (window.__VOICE_SHIELD_TIMINGS__ && !window.__VOICE_SHIELD_TIMINGS__.T3) {
+        const t3 = performance.now();
+        window.__VOICE_SHIELD_TIMINGS__.T3 = t3;
+        console.log(`[Latency Audit] T3: Web Speech API hardware ready in ${(t3 - (window.__VOICE_SHIELD_TIMINGS__.T2 || t3)).toFixed(1)} ms`);
+      }
       if (onStatusChangeRef.current) onStatusChangeRef.current("listening");
     };
 
@@ -87,6 +92,31 @@ export function useSpeechRecognition({ onTranscript, onStatusChange }) {
 
       const trimmedInterim = currentInterim.trim();
       setInterimText(trimmedInterim);
+
+      if (trimmedInterim || trimmedFinal) {
+        if (window.__VOICE_SHIELD_TIMINGS__ && !window.__VOICE_SHIELD_TIMINGS__.T4) {
+          const t4 = performance.now();
+          window.__VOICE_SHIELD_TIMINGS__.T4 = t4;
+          const t0 = window.__VOICE_SHIELD_TIMINGS__.T0 || t4;
+          const t1 = window.__VOICE_SHIELD_TIMINGS__.T1 || t4;
+          const t2 = window.__VOICE_SHIELD_TIMINGS__.T2 || t4;
+          const t3 = window.__VOICE_SHIELD_TIMINGS__.T3 || t4;
+
+          requestAnimationFrame(() => {
+            const t5 = performance.now();
+            window.__VOICE_SHIELD_TIMINGS__.T5 = t5;
+            console.log(`========================================
+[VOICE SHIELD LATENCY AUDIT REPORT]
+• T1 - T0 (Mic Permission / Acquisition) : ${(t1 - t0).toFixed(1)} ms
+• T2 - T1 (Speech Recognition Launch)    : ${(t2 - t1).toFixed(1)} ms
+• T3 - T2 (Web Speech Engine Handshake)  : ${(t3 - t2).toFixed(1)} ms
+• T4 - T3 (Speech-to-First-Interim)      : ${(t4 - t3).toFixed(1)} ms
+• T5 - T4 (React State -> DOM Render)    : ${(t5 - t4).toFixed(1)} ms
+• Total T5 - T0 (Complete Startup Latency): ${(t5 - t0).toFixed(1)} ms
+========================================`);
+          });
+        }
+      }
 
       const fullTranscript = accumulatedFinalRef.current
         ? trimmedInterim
