@@ -302,7 +302,7 @@ class TrainedForensicVoiceDetector(BaseDeepfakeDetector):
             prediction = "INCONCLUSIVE"
             confidence = "LOW"
             reasons.append(f"Short recording duration ({duration:.2f}s). Classification confidence is reduced.")
-        elif synthetic_prob >= 0.70:
+        elif synthetic_prob >= 0.65:
             prediction = "SYNTHETIC"
             confidence = "HIGH" if synthetic_prob >= 0.85 else "MEDIUM"
             reasons.append(f"High-confidence synthetic vocoder and acoustic generation artifacts detected ({round(synthetic_prob * 100)}% synthetic probability).")
@@ -310,7 +310,7 @@ class TrainedForensicVoiceDetector(BaseDeepfakeDetector):
                 reasons.append("Elevated high-frequency spectral rolloff characteristic of neural vocoder cutoff filters.")
             if feat_vector[0] > 0.08:
                 reasons.append("Elevated spectral flatness and phase noise indicating artificial carrier generation.")
-        elif synthetic_prob >= 0.40:
+        elif synthetic_prob >= 0.35:
             prediction = "INCONCLUSIVE"
             confidence = "UNCERTAIN"
             reasons.append(f"Acoustic features exhibit mixed characteristics ({round(synthetic_prob * 100)}% synthetic / {round(real_prob * 100)}% human probability).")

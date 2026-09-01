@@ -76,6 +76,13 @@ class VoiceAuthenticityDetail(BaseModel):
     reasons: list[str] = Field(default_factory=list)
 
 
+class SyntheticVoiceEvidence(BaseModel):
+    detected: bool = False
+    confidence: str = "LOW"  # "HIGH" | "MEDIUM" | "LOW" | "UNCERTAIN"
+    synthetic_probability: float = 0.0
+    evidence_summary: str | None = None
+
+
 class AnalysisResponse(BaseModel):
     analysis_id: str
     analysis_status: str = "completed"  # "completed" | "insufficient_audio" | "error"
@@ -86,6 +93,7 @@ class AnalysisResponse(BaseModel):
     prediction: str = "REAL"  # "REAL" | "SYNTHETIC" | "FAKE" | "NOT_ANALYZED"
     voice_authenticity: str = "LIKELY_HUMAN"  # "LIKELY_HUMAN" | "LIKELY_SYNTHETIC" | "POSSIBLY_SYNTHETIC" | "INCONCLUSIVE" | "NOT_ANALYZED"
     voice_authenticity_detail: VoiceAuthenticityDetail | None = None
+    synthetic_voice_evidence: SyntheticVoiceEvidence | None = None
     confidence: float | None = Field(default=None, ge=0, le=1)
     deepfake_probability: float | None = Field(default=None, ge=0, le=1)
     real_probability: float | None = Field(default=None, ge=0, le=1)

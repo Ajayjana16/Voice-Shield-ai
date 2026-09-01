@@ -492,7 +492,9 @@ export function HistoryPage({ onNavigate }) {
                   <span className="text-sm font-semibold text-slate-800">
                     {selectedAnalysis.analysis_status === "insufficient_audio"
                       ? "Skipped (No Audio)"
-                      : `${selectedAnalysis.voice_authenticity ? selectedAnalysis.voice_authenticity.replace("_", " ") : "Likely Human"} (${Math.round((selectedAnalysis.deepfake_probability || 0) * 100)}% Synthetic)`}
+                      : selectedAnalysis.voice_authenticity === "NOT_EVALUATED"
+                      ? "Not Evaluated (Text Only)"
+                      : `${selectedAnalysis.voice_authenticity ? selectedAnalysis.voice_authenticity.replace(/_/g, " ") : "Inconclusive"} (${Math.round((selectedAnalysis.deepfake_probability || 0) * 100)}% Synthetic)`}
                   </span>
                 </div>
 

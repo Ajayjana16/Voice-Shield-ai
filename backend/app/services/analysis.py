@@ -9,7 +9,12 @@ from uuid import uuid4
 
 from app.core.config import get_settings
 from app.db import store
-from app.models.schemas import AnalysisResponse, ThreatIndicator, VoiceAuthenticityDetail
+from app.models.schemas import (
+    AnalysisResponse,
+    SyntheticVoiceEvidence,
+    ThreatIndicator,
+    VoiceAuthenticityDetail,
+)
 from app.services.audio.preprocessing import (
     extract_features,
     load_audio,
@@ -117,25 +122,52 @@ def analyze_audio_file(
         df_result, prosody_score, prosody_reasons, acoustic_ms = future_acoustic.result()
         effective_transcript, stt_ms = future_stt.result()
 
-    deepfake_probability = df_result.synthetic_probability
+    synth_p = float(df_result.synthetic_probability)
+    real_p = float(df_result.real_probability)
     duration = features.duration_seconds or 0.0
 
-    # 3-State Voice Authenticity Resolution
-    if is_chunk or duration < 1.5:
-        voice_authenticity = "INCONCLUSIVE"
+    # 1. Unified Canonical Voice Authenticity Resolution
+    if df_result.model_inference_skipped or df_result.prediction == "NOT_ANALYZED":
+        voice_auth_label = "INCONCLUSIVE" if df_result.skip_reason else "ANALYSIS_FAILED"
+        auth_conf = "UNCERTAIN"
+        auth_status = "skipped" if df_result.model_inference_skipped else "failed"
         is_synthetic = False
-    elif df_result.prediction == "SYNTHETIC" or deepfake_probability >= 0.70:
-        voice_authenticity = "HIGH_CONFIDENCE_SYNTHETIC"
+    elif df_result.prediction == "SYNTHETIC" or synth_p >= 0.65:
+        voice_auth_label = "LIKELY_SYNTHETIC"
+        auth_conf = "HIGH" if synth_p >= 0.85 else "MEDIUM"
+        auth_status = "completed"
         is_synthetic = True
-    elif deepfake_probability >= 0.50:
-        voice_authenticity = "POSSIBLE_SYNTHETIC"
-        is_synthetic = False
-    elif deepfake_probability >= 0.30 or df_result.prediction == "INCONCLUSIVE":
-        voice_authenticity = "INCONCLUSIVE"
+    elif synth_p >= 0.35 or df_result.prediction == "INCONCLUSIVE" or is_chunk or duration < 1.0:
+        voice_auth_label = "INCONCLUSIVE"
+        auth_conf = "UNCERTAIN"
+        auth_status = "completed"
         is_synthetic = False
     else:
-        voice_authenticity = "LIKELY_HUMAN"
+        voice_auth_label = "LIKELY_HUMAN"
+        auth_conf = "HIGH" if real_p >= 0.85 else "MEDIUM"
+        auth_status = "completed"
         is_synthetic = False
+
+    voice_authenticity_detail = VoiceAuthenticityDetail(
+        label=voice_auth_label,
+        synthetic_probability=round(synth_p, 3),
+        human_probability=round(real_p, 3),
+        confidence=auth_conf,
+        model_name=df_result.model_name,
+        analysis_status=auth_status,
+        reasons=df_result.reasons,
+    )
+
+    synthetic_voice_evidence = SyntheticVoiceEvidence(
+        detected=is_synthetic,
+        confidence=auth_conf,
+        synthetic_probability=round(synth_p, 3),
+        evidence_summary=(
+            f"Forensic acoustic classifier detected synthetic generation signatures ({round(synth_p * 100)}% probability)."
+            if is_synthetic
+            else "Acoustic characteristics match biological human vocal tract production."
+        ),
+    )
 
     # 5. NLP Scam Intent Analysis on Generated/Provided Transcript
     t0_nlp = time.perf_counter()
@@ -149,15 +181,21 @@ def analyze_audio_file(
         possible_category, category_confidence, category_desc = infer_scam_category(
             detected_indicators=detected_scam_indicators,
             is_synthetic=is_synthetic,
-            deepfake_prob=deepfake_probability,
+            deepfake_prob=synth_p,
+            transcript=effective_transcript,
         )
     else:
         context_risk = None
         detected_scam_indicators = []
         analysis_status = "partial_analysis"
-        possible_category = "Conversation Analysis Not Available"
-        category_confidence = "UNCERTAIN"
-        category_desc = "Voice audio was analyzed, but spoken conversation content could not be reliably transcribed. Scam detection based on call content was not completed."
+        if is_synthetic:
+            possible_category = "Synthetic / Cloned Voice Interaction"
+            category_confidence = auth_conf
+            category_desc = "Acoustic vocoder analysis verified synthetic/cloned speech. Note: Synthetic voice alone indicates artificial generation."
+        else:
+            possible_category = "Conversation Analysis Not Available"
+            category_confidence = "UNCERTAIN"
+            category_desc = "Voice audio was analyzed, but spoken conversation content could not be reliably transcribed. Scam detection based on call content was not completed."
     nlp_ms = (time.perf_counter() - t0_nlp) * 1000
 
     # 6. Speaker Biometric Verification (Optional / Enterprise)
@@ -179,7 +217,7 @@ def analyze_audio_file(
     # 7. Security-Aware Risk Fusion Engine
     t0_risk = time.perf_counter()
     final_score, risk_level, recommendation, breakdown = calculate_risk_detailed(
-        deepfake_probability=deepfake_probability,
+        deepfake_probability=synth_p,
         prosody_score=prosody_score,
         speaker_mismatch=speaker_mismatch,
         context_risk=context_risk,
@@ -191,11 +229,11 @@ def analyze_audio_file(
 
     # 8. Threat Indicators & Evidence Assembly
     indicators = _build_indicators(
-        deepfake_probability=deepfake_probability,
+        deepfake_probability=synth_p,
         context_indicators=detected_scam_indicators,
         speaker_mismatch=speaker_mismatch,
         has_speaker_ref=(reference_embedding is not None),
-        is_neural_model=(df_result.model_type == "pretrained_antispoofing" and not df_result.fallback_used),
+        is_neural_model=(df_result.model_type == "trained_forensic_classifier" and not df_result.fallback_used),
         duration=duration,
         is_chunk=is_chunk,
     )
@@ -205,37 +243,6 @@ def analyze_audio_file(
         f"[PERF] Pipeline Completed in {total_ms:.1f}ms "
         f"(AudioPrep={audio_prep_ms:.1f}ms, VAD={vad_ms:.1f}ms, STT={stt_ms:.1f}ms, "
         f"Acoustics={acoustic_ms:.1f}ms, NLP={nlp_ms:.1f}ms, RiskFusion={risk_ms:.1f}ms)"
-    )
-
-    # Build Structured Voice Authenticity Detail
-    synth_p = float(df_result.synthetic_probability)
-    real_p = float(df_result.real_probability)
-
-    if df_result.model_inference_skipped or df_result.prediction == "NOT_ANALYZED":
-        voice_auth_label = "INCONCLUSIVE" if df_result.skip_reason else "ANALYSIS_FAILED"
-        auth_conf = "UNCERTAIN"
-        auth_status = "skipped" if df_result.model_inference_skipped else "failed"
-    elif df_result.prediction == "SYNTHETIC" or synth_p >= 0.70:
-        voice_auth_label = "LIKELY_SYNTHETIC"
-        auth_conf = "HIGH" if synth_p >= 0.85 else "MEDIUM"
-        auth_status = "completed"
-    elif synth_p >= 0.40 or df_result.prediction == "INCONCLUSIVE" or is_chunk or duration < 1.0:
-        voice_auth_label = "INCONCLUSIVE"
-        auth_conf = "UNCERTAIN"
-        auth_status = "completed"
-    else:
-        voice_auth_label = "LIKELY_HUMAN"
-        auth_conf = "HIGH" if real_p >= 0.85 else "MEDIUM"
-        auth_status = "completed"
-
-    voice_authenticity_detail = VoiceAuthenticityDetail(
-        label=voice_auth_label,
-        synthetic_probability=round(synth_p, 3),
-        human_probability=round(real_p, 3),
-        confidence=auth_conf,
-        model_name=df_result.model_name,
-        analysis_status=auth_status,
-        reasons=df_result.reasons,
     )
 
     detected_threats = [
@@ -250,6 +257,7 @@ def analyze_audio_file(
         prediction="SYNTHETIC" if voice_auth_label == "LIKELY_SYNTHETIC" else ("REAL" if voice_auth_label == "LIKELY_HUMAN" else "INCONCLUSIVE"),
         voice_authenticity=voice_auth_label,
         voice_authenticity_detail=voice_authenticity_detail,
+        synthetic_voice_evidence=synthetic_voice_evidence,
         confidence=round(max(synth_p, real_p), 3),
         deepfake_probability=round(synth_p, 3),
         real_probability=round(real_p, 3),

@@ -861,7 +861,7 @@ export function LiveMonitorPage({ onNavigate }) {
       const transcriptText = report.transcript || liveTranscriptRef.current || transcript || "No audible conversation captured.";
       const indicators = report.detected_threats || report.indicators || [];
       const sessionId = report.analysis_id || `live_${Date.now().toString(36)}`;
-      const voiceAuth = report.voice_authenticity ? report.voice_authenticity.replace(/_/g, " ") : "Likely Human";
+      const voiceAuth = report.voice_authenticity ? report.voice_authenticity.replace(/_/g, " ") : (report.deepfake_probability >= 0.70 ? "Likely Synthetic" : "Inconclusive");
       const deepfakeConf = report.deepfake_probability != null ? `${Math.round(report.deepfake_probability * 100)}%` : "N/A";
       const auditStatus = report.risk_level === "NO_SPEECH" ? "No Speech Captured" : "Verified Final";
 
@@ -1258,13 +1258,13 @@ ${
               <div className="report-signals-section">
                 <div className="flex justify-between items-center mb-1">
                   <h4 className="report-section-heading">Voice Authenticity</h4>
-                  <span className="status-pill-subtle pill-safe">
-                    {liveDeepfakeProb >= 0.85 ? "Synthetic Detected" : liveDeepfakeProb >= 0.65 ? "Suspicious" : "Likely Human"}
+                  <span className={`status-pill-subtle ${liveDeepfakeProb >= 0.70 ? "pill-danger" : liveDeepfakeProb >= 0.40 ? "pill-warning" : "pill-safe"}`}>
+                    {liveDeepfakeProb >= 0.70 ? "Synthetic Detected" : liveDeepfakeProb >= 0.40 ? "Inconclusive" : "Likely Human"}
                   </span>
                 </div>
                 <p className="text-xs text-slate-600">
-                  {liveDeepfakeProb >= 0.85
-                    ? `Pretrained neural model detected synthetic speech vocoder artifacts (${Math.round(liveDeepfakeProb * 100)}% confidence).`
+                  {liveDeepfakeProb >= 0.70
+                    ? `Forensic anti-spoofing classifier detected synthetic speech vocoder artifacts (${Math.round(liveDeepfakeProb * 100)}% confidence).`
                     : "Acoustic spectrogram dynamics match natural biological human speech bounds."}
                 </p>
               </div>
@@ -1275,7 +1275,6 @@ ${
                   <h4 className="report-section-heading mb-0">Live Detection Timeline ({timelineEvents.length})</h4>
                   <div className="timeline-sort-control">
                     <span className="timeline-sort-label">Sort:</span>
-                    <div className="timeline-segmented-group" role="group" aria-label="Timeline sort order">
                       <button
                         type="button"
                         className={`timeline-segment-btn ${timelineSortOrder === "newest" ? "active" : ""}`}
@@ -1290,7 +1289,6 @@ ${
                       >
                         Oldest First
                       </button>
-                    </div>
                   </div>
                 </div>
                 <div className="timeline-feed-box max-h-48 overflow-y-auto">
@@ -1393,8 +1391,8 @@ ${
 
             <div className="final-metric-box">
               <span className="metric-k">Voice Authenticity</span>
-              <strong className="metric-v text-sm text-emerald-700">
-                {finalReport.voice_authenticity ? finalReport.voice_authenticity.replace("_", " ") : "Likely Human"}
+              <strong className={`metric-v text-sm ${finalReport.voice_authenticity?.includes("SYNTHETIC") ? "text-red-700" : finalReport.voice_authenticity === "INCONCLUSIVE" ? "text-amber-700" : "text-emerald-700"}`}>
+                {finalReport.voice_authenticity ? finalReport.voice_authenticity.replace(/_/g, " ") : (finalReport.deepfake_probability >= 0.70 ? "Likely Synthetic" : "Inconclusive")}
               </strong>
             </div>
 
