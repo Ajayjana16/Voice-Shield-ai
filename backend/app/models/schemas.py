@@ -83,6 +83,20 @@ class SyntheticVoiceEvidence(BaseModel):
     evidence_summary: str | None = None
 
 
+class UnifiedDecisionPayload(BaseModel):
+    transcript: str | None = None
+    voiceAuthenticity: str = "Likely Human"
+    syntheticProbability: float = 0.0
+    humanProbability: float = 1.0
+    scamCategory: str = "Routine / Normal Call"
+    scamConfidence: str = "HIGH"
+    threatScore: int = 0
+    overallRisk: str = "LOW RISK"
+    detectedThreatIndicators: list[str] = Field(default_factory=list)
+    recommendedAction: str = ""
+    analysisReasoning: str = ""
+
+
 class AnalysisResponse(BaseModel):
     analysis_id: str
     analysis_status: str = "completed"  # "completed" | "insufficient_audio" | "error"
@@ -91,9 +105,10 @@ class AnalysisResponse(BaseModel):
     skip_reason: str | None = None
     reason: str | None = None
     prediction: str = "REAL"  # "REAL" | "SYNTHETIC" | "FAKE" | "NOT_ANALYZED"
-    voice_authenticity: str = "LIKELY_HUMAN"  # "LIKELY_HUMAN" | "LIKELY_SYNTHETIC" | "POSSIBLY_SYNTHETIC" | "INCONCLUSIVE" | "NOT_ANALYZED"
+    voice_authenticity: str = "LIKELY_HUMAN"  # "Likely Synthetic / AI Generated" | "Likely Human" | "Uncertain" | "Voice authenticity analysis unavailable"
     voice_authenticity_detail: VoiceAuthenticityDetail | None = None
     synthetic_voice_evidence: SyntheticVoiceEvidence | None = None
+    unified_decision: UnifiedDecisionPayload | None = None
     confidence: float | None = Field(default=None, ge=0, le=1)
     deepfake_probability: float | None = Field(default=None, ge=0, le=1)
     real_probability: float | None = Field(default=None, ge=0, le=1)

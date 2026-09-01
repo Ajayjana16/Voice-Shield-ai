@@ -1022,21 +1022,25 @@ ${
                 <div className="flex justify-between items-center mb-2">
                   <h4 className="report-section-heading">Voice Authenticity &amp; Anti-Spoofing</h4>
                   <span className={`status-pill-subtle ${
-                    (analysis.voice_authenticity || "").includes("SYNTHETIC")
+                    (analysis.voice_authenticity || "").toLowerCase().includes("synthetic")
                       ? "pill-danger"
-                      : analysis.voice_authenticity === "INCONCLUSIVE"
+                      : (analysis.voice_authenticity || "").toLowerCase().includes("uncertain") || (analysis.voice_authenticity || "").toLowerCase().includes("inconclusive")
                       ? "pill-warning"
                       : analysis.voice_authenticity === "NOT_EVALUATED"
                       ? "pill-neutral"
+                      : (analysis.voice_authenticity || "").toLowerCase().includes("unavailable")
+                      ? "pill-warning"
                       : "pill-safe"
                   }`}>
                     {analysis.voice_authenticity === "NOT_EVALUATED"
                       ? "Not Evaluated (Text Only)"
-                      : (analysis.voice_authenticity || "").includes("SYNTHETIC")
-                      ? "LIKELY SYNTHETIC"
-                      : analysis.voice_authenticity === "INCONCLUSIVE"
-                      ? "INCONCLUSIVE"
-                      : "LIKELY HUMAN"}
+                      : (analysis.voice_authenticity || "").toLowerCase().includes("synthetic")
+                      ? "Likely Synthetic / AI Generated"
+                      : (analysis.voice_authenticity || "").toLowerCase().includes("uncertain") || (analysis.voice_authenticity || "").toLowerCase().includes("inconclusive")
+                      ? "Uncertain"
+                      : (analysis.voice_authenticity || "").toLowerCase().includes("unavailable")
+                      ? "Voice authenticity analysis unavailable"
+                      : "Likely Human"}
                   </span>
                 </div>
 
