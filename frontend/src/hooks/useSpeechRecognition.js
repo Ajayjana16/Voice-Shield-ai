@@ -12,6 +12,9 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
   const sessionBaseTextRef = useRef("");
   const sessionSegmentsRef = useRef([]);
   const instanceFinalTextRef = useRef("");
+  const instanceFinalizedMapRef = useRef(new Map());
+  const firstInterimLoggedRef = useRef(false);
+  const firstFinalLoggedRef = useRef(false);
   const getTimestampRef = useRef(getTimestamp);
 
   const onTranscriptRef = useRef(onTranscript);
@@ -41,6 +44,7 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
 
     recognition.onstart = () => {
       setIsListening(true);
+      console.log(`[VoiceShield Debug] RECOGNITION_START at ${performance.now().toFixed(1)} ms`);
       if (window.__VOICE_SHIELD_TIMINGS__ && !window.__VOICE_SHIELD_TIMINGS__.T3) {
         const t3 = performance.now();
         window.__VOICE_SHIELD_TIMINGS__.T3 = t3;
@@ -61,12 +65,19 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
 
         if (res.isFinal) {
           instanceFinal += (instanceFinal ? " " : "") + text;
-          const timeStr = getTimestampRef.current ? getTimestampRef.current() : "00:00";
-          currentInstanceSegments.push({
-            id: `inst_seg_${i}_${text.substring(0, 10)}`,
-            time: timeStr,
-            text: text,
-          });
+          if (!instanceFinalizedMapRef.current.has(i)) {
+            const timeStr = getTimestampRef.current ? getTimestampRef.current() : "00:00";
+            instanceFinalizedMapRef.current.set(i, {
+              id: `seg_${Date.now()}_${i}`,
+              time: timeStr,
+              text: text,
+            });
+            if (!firstFinalLoggedRef.current) {
+              firstFinalLoggedRef.current = true;
+              console.log(`[VoiceShield Debug] FIRST_FINAL_RESULT: "${text}" at ${performance.now().toFixed(1)} ms [${timeStr}]`);
+            }
+          }
+          currentInstanceSegments.push(instanceFinalizedMapRef.current.get(i));
         } else {
           currentInterim += (currentInterim ? " " : "") + text;
         }
@@ -96,6 +107,11 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
       setInterimText(currentInterim);
       setSegments(allSegments);
 
+      if (currentInterim && !firstInterimLoggedRef.current) {
+        firstInterimLoggedRef.current = true;
+        console.log(`[VoiceShield Debug] FIRST_INTERIM_RESULT: "${currentInterim}" at ${performance.now().toFixed(1)} ms`);
+      }
+
       // Latency instrumentation
       if (currentInterim || instanceFinal) {
         if (window.__VOICE_SHIELD_TIMINGS__ && !window.__VOICE_SHIELD_TIMINGS__.T4) {
@@ -109,6 +125,7 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
           requestAnimationFrame(() => {
             const t5 = performance.now();
             window.__VOICE_SHIELD_TIMINGS__.T5 = t5;
+            console.log(`[VoiceShield Debug] TRANSCRIPT_RENDER at ${t5.toFixed(1)} ms`);
             console.log(`========================================
 [VOICE SHIELD LATENCY AUDIT REPORT]
 • T1 - T0 (Mic Permission / Acquisition) : ${(t1 - t0).toFixed(1)} ms
@@ -148,6 +165,13 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
           instanceFinalTextRef.current
         ).trim();
         instanceFinalTextRef.current = "";
+      }
+      if (instanceFinalizedMapRef.current.size > 0) {
+        sessionSegmentsRef.current = [
+          ...sessionSegmentsRef.current,
+          ...Array.from(instanceFinalizedMapRef.current.values()),
+        ];
+        instanceFinalizedMapRef.current.clear();
       }
 
       if (isRunningRef.current) {
@@ -196,6 +220,9 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
       sessionBaseTextRef.current = "";
       sessionSegmentsRef.current = [];
       instanceFinalTextRef.current = "";
+      instanceFinalizedMapRef.current.clear();
+      firstInterimLoggedRef.current = false;
+      firstFinalLoggedRef.current = false;
       setConfirmedText("");
       setInterimText("");
       setSegments([]);
@@ -251,6 +278,9 @@ export function useSpeechRecognition({ onTranscript, onStatusChange, getTimestam
     sessionBaseTextRef.current = "";
     sessionSegmentsRef.current = [];
     instanceFinalTextRef.current = "";
+    instanceFinalizedMapRef.current.clear();
+    firstInterimLoggedRef.current = false;
+    firstFinalLoggedRef.current = false;
     setConfirmedText("");
     setInterimText("");
     setSegments([]);

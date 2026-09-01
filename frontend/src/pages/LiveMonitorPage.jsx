@@ -243,13 +243,11 @@ export function LiveMonitorPage({ onNavigate }) {
     return `${mins}:${secs}`;
   }, []);
 
-  // Compute Strictly Monotonic Timestamp for Events
+  // Compute Elapsed Timestamp for Events
   const getSessionTimestamp = useCallback(() => {
     if (!sessionStartTimeRef.current) return "00:00";
     const elapsed = Math.max(0, Math.floor((Date.now() - sessionStartTimeRef.current) / 1000));
-    const totalSecs = Math.max(elapsed, (lastEventSecsRef.current ?? -1) + 1);
-    lastEventSecsRef.current = totalSecs;
-    return formatTimer(totalSecs);
+    return formatTimer(elapsed);
   }, [formatTimer]);
 
   // Add Event to Detection Timeline (Newest by Sequence)
@@ -278,6 +276,8 @@ export function LiveMonitorPage({ onNavigate }) {
 
     latestRequestIdRef.current += 1;
     const currentRequestId = latestRequestIdRef.current;
+
+    console.log(`[VoiceShield Debug] THREAT_ANALYSIS_START on: "${normalized}" at ${performance.now().toFixed(1)} ms`);
 
     setLiveAnalysis((prev) => {
       const updated = { ...prev, status: "analyzing" };
@@ -549,6 +549,7 @@ export function LiveMonitorPage({ onNavigate }) {
   const handleStartMonitoring = async () => {
     const t0 = performance.now();
     window.__VOICE_SHIELD_TIMINGS__ = { T0: t0, T1: 0, T2: 0, T3: 0, T4: 0, T5: 0 };
+    console.log(`[VoiceShield Debug] LIVE_START_TIME at ${t0.toFixed(1)} ms`);
     console.log("[Latency Audit] T0: Start Live Monitoring clicked");
 
     try {
@@ -707,7 +708,7 @@ export function LiveMonitorPage({ onNavigate }) {
                 recommendation: contextRes.recommendation || liveState.recommendation || "Verify caller identity independently before sharing sensitive credentials.",
                 detected_threats: mergedIndicators,
                 evidence: mergedEvidence,
-                transcript: normalizedCaptured || "Live spoken dialogue captured during active monitoring.",
+                transcript: normalizedCaptured || "",
                 voice_authenticity: liveDeepfakeProb >= 0.85 ? "HIGH_CONFIDENCE_SYNTHETIC" : "LIKELY_HUMAN",
                 deepfake_probability: liveDeepfakeProb ?? 0.05,
                 risk_reasoning: mergedIndicators.length > 0
@@ -735,7 +736,7 @@ export function LiveMonitorPage({ onNavigate }) {
             recommendation: liveState.recommendation || "Verify caller identity independently before sharing credentials.",
             detected_threats: accumulatedIndicators,
             evidence: accumulatedEvidence,
-            transcript: normalizedCaptured || "Live spoken dialogue captured during active monitoring.",
+            transcript: normalizedCaptured || "",
             voice_authenticity: liveDeepfakeProb >= 0.85 ? "HIGH_CONFIDENCE_SYNTHETIC" : "LIKELY_HUMAN",
             deepfake_probability: liveDeepfakeProb ?? 0.05,
             risk_reasoning: accumulatedIndicators.length > 0
