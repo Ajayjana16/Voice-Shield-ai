@@ -39,7 +39,8 @@ class AudioData:
     digest: str
 
 
-def load_audio(path: Path) -> AudioData:
+def load_audio(path: Path | str) -> AudioData:
+    path = Path(path)
     data = path.read_bytes()
     digest = hashlib.sha256(data).hexdigest()
     entropy = _byte_entropy(data)

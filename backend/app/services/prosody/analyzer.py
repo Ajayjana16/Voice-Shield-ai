@@ -5,20 +5,23 @@ def prosody_anomaly_score(features: AcousticFeatures) -> tuple[float, list[str]]
     """
     Evaluates acoustic prosody dynamics.
     Natural human speech exhibits pauses, breathing, and pitch inflection.
-    This analyzer only flags extreme non-biological anomalies (e.g. completely flat monotone)
-    when sufficient sustained audio (>= 4.0s) is present.
     """
     duration = features.duration_seconds or 0.0
-    if duration < 4.0 or features.rms_energy < 0.0050:
+    if duration < 2.0 or features.rms_energy < 0.0030:
         return 0.0, []
 
     score = 0.0
     reasons: list[str] = []
 
-    # Extremely unnatural robotic monotone: zero dynamic range (< 0.02) combined with extreme pitch clamp
-    if features.dynamic_range < 0.02 and (features.pitch_hz < 60 or features.pitch_hz > 450):
-        score += 0.30
-        reasons.append("Sustained flat robotic monotone with unnatural pitch limits.")
+    # 1. Unnatural dynamic range compression (< 0.15)
+    if features.dynamic_range < 0.15 and features.rms_energy > 0.01:
+        score += 0.25
+        reasons.append("Sustained flat dynamic amplitude envelope lacking natural syllabic modulation.")
+
+    # 2. Extreme pitch clamp (< 65Hz or > 400Hz)
+    if features.pitch_hz > 0 and (features.pitch_hz < 65 or features.pitch_hz > 400):
+        score += 0.20
+        reasons.append(f"Fundamental frequency ({features.pitch_hz:.1f}Hz) outside standard biological speech registers.")
 
     return min(score, 1.0), reasons
 

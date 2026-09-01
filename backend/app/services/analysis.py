@@ -119,31 +119,22 @@ def analyze_audio_file(
     deepfake_probability = df_result.synthetic_probability
     duration = features.duration_seconds or 0.0
 
-    # Minimum evidence gate: Short recordings (<3.5s) or streaming chunks cannot produce strong synthetic conclusions
-    if is_chunk or duration < 3.5:
+    # 3-State Voice Authenticity Resolution
+    if is_chunk or duration < 1.5:
         voice_authenticity = "INCONCLUSIVE"
         is_synthetic = False
-        deepfake_probability = min(deepfake_probability, 0.08)
-    elif df_result.model_type == "pretrained_antispoofing" and not df_result.fallback_used:
-        # Full pretrained neural model with sufficient duration
-        if deepfake_probability >= 0.85:
-            voice_authenticity = "HIGH_CONFIDENCE_SYNTHETIC"
-            is_synthetic = True
-        elif deepfake_probability >= 0.70:
-            voice_authenticity = "POSSIBLE_SYNTHETIC"
-            is_synthetic = False
-        elif deepfake_probability >= 0.35:
-            voice_authenticity = "INCONCLUSIVE"
-            is_synthetic = False
-        else:
-            voice_authenticity = "LIKELY_HUMAN"
-            is_synthetic = False
+    elif df_result.prediction == "SYNTHETIC" or deepfake_probability >= 0.70:
+        voice_authenticity = "HIGH_CONFIDENCE_SYNTHETIC"
+        is_synthetic = True
+    elif deepfake_probability >= 0.50:
+        voice_authenticity = "POSSIBLE_SYNTHETIC"
+        is_synthetic = False
+    elif deepfake_probability >= 0.30 or df_result.prediction == "INCONCLUSIVE":
+        voice_authenticity = "INCONCLUSIVE"
+        is_synthetic = False
     else:
-        # Acoustic baseline fallback (No confirmed neural deepfake model)
-        # Normal microphone speech is biological human speech
         voice_authenticity = "LIKELY_HUMAN"
         is_synthetic = False
-        deepfake_probability = min(deepfake_probability, 0.08)
 
     # 5. NLP Scam Intent Analysis on Generated/Provided Transcript
     t0_nlp = time.perf_counter()
@@ -219,7 +210,14 @@ def analyze_audio_file(
         indicator.label for indicator in indicators if indicator.severity in {"MEDIUM", "HIGH", "CRITICAL"}
     ]
 
-    prediction_label = "SYNTHETIC" if (is_synthetic and deepfake_probability >= 0.50) else "REAL"
+    if voice_authenticity == "HIGH_CONFIDENCE_SYNTHETIC":
+        prediction_label = "SYNTHETIC"
+    elif voice_authenticity == "POSSIBLE_SYNTHETIC":
+        prediction_label = "POSSIBLE_SYNTHETIC"
+    elif voice_authenticity == "INCONCLUSIVE":
+        prediction_label = "INCONCLUSIVE"
+    else:
+        prediction_label = "REAL"
 
     response = AnalysisResponse(
         analysis_id=str(uuid4()),
@@ -230,7 +228,7 @@ def analyze_audio_file(
         voice_authenticity=voice_authenticity,
         confidence=round(max(deepfake_probability, 1.0 - deepfake_probability), 3),
         deepfake_probability=round(deepfake_probability, 3),
-        speaker_match=speaker_similarity,
+        speaker_match=round(1.0 - speaker_mismatch, 3) if reference_embedding is not None else None,
         speaker_mismatch=round(speaker_mismatch, 3) if reference_embedding else None,
         speaker_match_score=speaker_match_score,
         speaker_match_confidence=speaker_match_conf,
@@ -271,15 +269,25 @@ def _build_indicators(
 ) -> list[ThreatIndicator]:
     indicators: list[ThreatIndicator] = []
 
-    # High-confidence neural anti-spoofing detection on sustained speech only
-    if is_neural_model and deepfake_probability >= 0.85 and duration >= 3.5 and not is_chunk:
+    # High-confidence synthetic voice detection on sustained speech
+    if deepfake_probability >= 0.70 and duration >= 2.0 and not is_chunk:
         indicators.append(
             ThreatIndicator(
-                label="Synthetic Voice Artifact",
-                severity="HIGH",
-                detail=f"Pretrained anti-spoofing model detected high-confidence synthetic cloning ({round(deepfake_probability * 100)}%).",
-                explanation="Neural anti-spoofing classifier detected vocoder artifacts or generative voice cloning.",
-                why_it_matters="Synthetic speech signals generative voice cloning commonly used in impersonation scams.",
+                label="Synthetic / Cloned Voice Artifact",
+                severity="CRITICAL" if deepfake_probability >= 0.85 else "HIGH",
+                detail=f"Acoustic forensic engine detected high-confidence synthetic cloning signatures ({round(deepfake_probability * 100)}%).",
+                explanation="Acoustic analysis detected unnatural pitch step quantization, flattened dynamic envelope, or vocoder carrier artifacts.",
+                why_it_matters="Synthetic speech signals generative AI voice cloning commonly used in impersonation scams.",
+            )
+        )
+    elif deepfake_probability >= 0.50 and duration >= 2.0 and not is_chunk:
+        indicators.append(
+            ThreatIndicator(
+                label="Suspicious Voice Modulation",
+                severity="MEDIUM",
+                detail=f"Acoustic characteristics exhibit elevated synthetic/vocoder traits ({round(deepfake_probability * 100)}%).",
+                explanation="Constrained pitch dynamics or unnatural spectral flatness observed in voice phonation.",
+                why_it_matters="Potential use of voice conversion software or low-bitrate generative speech synthesis.",
             )
         )
 
