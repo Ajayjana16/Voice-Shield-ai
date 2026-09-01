@@ -1021,21 +1021,74 @@ ${
               <div className="report-signals-section">
                 <div className="flex justify-between items-center mb-2">
                   <h4 className="report-section-heading">Voice Authenticity &amp; Anti-Spoofing</h4>
-                  <span className={`status-pill-subtle ${analysis.voice_authenticity === "HIGH_CONFIDENCE_SYNTHETIC" ? "pill-danger" : analysis.voice_authenticity === "POSSIBLE_SYNTHETIC" ? "pill-warning" : analysis.voice_authenticity === "NOT_EVALUATED" ? "pill-neutral" : "pill-safe"}`}>
-                    {analysis.voice_authenticity === "NOT_EVALUATED" ? "Not Evaluated (Text Only)" : analysis.voice_authenticity === "HIGH_CONFIDENCE_SYNTHETIC" ? "Strong Synthetic Detection" : analysis.voice_authenticity === "POSSIBLE_SYNTHETIC" ? "Suspicious Characteristics" : analysis.voice_authenticity === "INSUFFICIENT_AUDIO" ? "Insufficient Audio" : "Likely Human"}
+                  <span className={`status-pill-subtle ${
+                    (analysis.voice_authenticity || "").includes("SYNTHETIC")
+                      ? "pill-danger"
+                      : analysis.voice_authenticity === "INCONCLUSIVE"
+                      ? "pill-warning"
+                      : analysis.voice_authenticity === "NOT_EVALUATED"
+                      ? "pill-neutral"
+                      : "pill-safe"
+                  }`}>
+                    {analysis.voice_authenticity === "NOT_EVALUATED"
+                      ? "Not Evaluated (Text Only)"
+                      : (analysis.voice_authenticity || "").includes("SYNTHETIC")
+                      ? "LIKELY SYNTHETIC"
+                      : analysis.voice_authenticity === "INCONCLUSIVE"
+                      ? "INCONCLUSIVE"
+                      : "LIKELY HUMAN"}
                   </span>
                 </div>
+
                 <div className="p-3 bg-slate-50 border border-slate-200 rounded-md text-xs text-slate-700 leading-relaxed">
-                  <p>
-                    {analysis.voice_authenticity === "NOT_EVALUATED"
-                      ? "Voice Authenticity: Not Evaluated. Reason: Analysis was performed on a text transcript without an audio recording."
-                      : analysis.voice_authenticity === "HIGH_CONFIDENCE_SYNTHETIC"
-                      ? `Neural anti-spoofing model verified synthetic vocoder artifacts (${Math.round((analysis.deepfake_probability || 0) * 100)}% confidence).`
-                      : analysis.voice_authenticity === "INSUFFICIENT_AUDIO"
-                      ? "The available audio was insufficient to perform a reliable synthetic voice determination."
-                      : "Acoustic spectrogram dynamics match natural biological human speech parameters."}
-                  </p>
-                  <div className="flex items-center gap-3 mt-2 pt-2 border-t border-slate-200 text-slate-500 font-medium text-2xs">
+                  {/* Metric Bar Row */}
+                  {analysis.voice_authenticity !== "NOT_EVALUATED" && (
+                    <div className="grid grid-cols-3 gap-2 p-2.5 bg-white border border-slate-200 rounded-md mb-2.5 text-center">
+                      <div>
+                        <span className="text-2xs text-slate-400 font-semibold uppercase block">Synthetic Prob</span>
+                        <strong className={`text-sm font-bold ${(analysis.deepfake_probability ?? 0) >= 0.5 ? "text-red-700" : "text-slate-700"}`}>
+                          {analysis.deepfake_probability !== null && analysis.deepfake_probability !== undefined
+                            ? `${Math.round(analysis.deepfake_probability * 100)}%`
+                            : "—"}
+                        </strong>
+                      </div>
+                      <div>
+                        <span className="text-2xs text-slate-400 font-semibold uppercase block">Human Prob</span>
+                        <strong className={`text-sm font-bold ${(analysis.real_probability ?? (1 - (analysis.deepfake_probability || 0))) >= 0.5 ? "text-emerald-700" : "text-slate-700"}`}>
+                          {analysis.real_probability !== null && analysis.real_probability !== undefined
+                            ? `${Math.round(analysis.real_probability * 100)}%`
+                            : analysis.deepfake_probability !== null && analysis.deepfake_probability !== undefined
+                            ? `${Math.round((1 - analysis.deepfake_probability) * 100)}%`
+                            : "—"}
+                        </strong>
+                      </div>
+                      <div>
+                        <span className="text-2xs text-slate-400 font-semibold uppercase block">Confidence</span>
+                        <strong className="text-sm font-bold text-blue-700">
+                          {analysis.voice_authenticity_detail?.confidence || ((analysis.deepfake_probability >= 0.85 || analysis.deepfake_probability <= 0.15) ? "HIGH" : "MEDIUM")}
+                        </strong>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Forensic Explanation */}
+                  <div className="space-y-1">
+                    {analysis.voice_authenticity_detail?.reasons && analysis.voice_authenticity_detail.reasons.length > 0 ? (
+                      analysis.voice_authenticity_detail.reasons.map((r, i) => (
+                        <p key={i} className="text-xs text-slate-700 leading-relaxed">• {r}</p>
+                      ))
+                    ) : (
+                      <p className="text-xs text-slate-700 leading-relaxed">
+                        {analysis.voice_authenticity === "NOT_EVALUATED"
+                          ? "Voice authenticity was not evaluated because a text transcript was submitted without an audio recording."
+                          : (analysis.voice_authenticity || "").includes("SYNTHETIC")
+                          ? `Anti-spoofing model detected synthetic vocoder and acoustic generation artifacts (${Math.round((analysis.deepfake_probability || 0) * 100)}% probability).`
+                          : "Acoustic and prosodic dynamics match natural biological human speech production."}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-3 mt-2.5 pt-2 border-t border-slate-200 text-slate-500 font-medium text-2xs">
                     <span className="text-emerald-700 font-semibold">Human Voice ≠ Safe Call</span>
                     <span>•</span>
                     <span className="text-slate-700">Synthetic Voice ≠ Automatically a Scam</span>

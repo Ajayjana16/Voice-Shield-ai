@@ -66,6 +66,16 @@ class DetectedContextIndicator(BaseModel):
     why_it_matters: str | None = None
 
 
+class VoiceAuthenticityDetail(BaseModel):
+    label: str = "LIKELY_HUMAN"  # "LIKELY_HUMAN" | "LIKELY_SYNTHETIC" | "INCONCLUSIVE" | "ANALYSIS_FAILED" | "NOT_EVALUATED"
+    synthetic_probability: float = 0.0  # 0.0 to 1.0
+    human_probability: float = 1.0  # 0.0 to 1.0
+    confidence: str = "HIGH"  # "HIGH" | "MEDIUM" | "LOW" | "UNCERTAIN" | "N/A"
+    model_name: str = "VoiceShield-Forensic-Acoustic-v3"
+    analysis_status: str = "completed"  # "completed" | "skipped" | "failed" | "not_evaluated"
+    reasons: list[str] = Field(default_factory=list)
+
+
 class AnalysisResponse(BaseModel):
     analysis_id: str
     analysis_status: str = "completed"  # "completed" | "insufficient_audio" | "error"
@@ -74,9 +84,11 @@ class AnalysisResponse(BaseModel):
     skip_reason: str | None = None
     reason: str | None = None
     prediction: str = "REAL"  # "REAL" | "SYNTHETIC" | "FAKE" | "NOT_ANALYZED"
-    voice_authenticity: str = "LIKELY_HUMAN"  # "LIKELY_HUMAN" | "POSSIBLY_SYNTHETIC" | "SYNTHETIC_DETECTED" | "NOT_ANALYZED"
+    voice_authenticity: str = "LIKELY_HUMAN"  # "LIKELY_HUMAN" | "LIKELY_SYNTHETIC" | "POSSIBLY_SYNTHETIC" | "INCONCLUSIVE" | "NOT_ANALYZED"
+    voice_authenticity_detail: VoiceAuthenticityDetail | None = None
     confidence: float | None = Field(default=None, ge=0, le=1)
     deepfake_probability: float | None = Field(default=None, ge=0, le=1)
+    real_probability: float | None = Field(default=None, ge=0, le=1)
     speaker_match: float | None = Field(default=None, ge=0, le=1)
     speaker_mismatch: float | None = Field(default=None, ge=0, le=1)
     speaker_match_score: int | None = Field(default=None, ge=0, le=100)

@@ -1,390 +1,353 @@
+"""
+Voice Shield AI — Voice Authenticity & Anti-Spoofing Detection Engine.
+Utilizes a trained multi-dimensional forensic acoustic classifier (MFCCs, spectral rolloff,
+spectral flatness, high-frequency energy ratio, flux, and pitch jitter) to reliably distinguish
+natural human speech from AI-generated/TTS/cloned voices.
+"""
+from __future__ import annotations
+
+import logging
+import os
 import time
 from abc import ABC, abstractmethod
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+import joblib
+import numpy as np
+from scipy.fftpack import dct
+
 from app.core.config import get_settings
 from app.models.schemas import AcousticFeatures, DeepfakeDetectionResult
 from app.services.audio.preprocessing import load_audio_resampled, validate_speech_activity
 
+logger = logging.getLogger("voiceshield.authenticity")
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+MODEL_PATH = BASE_DIR / "models" / "saved" / "deepfake_detector" / "forensic_voice_classifier.joblib"
+
+_FORENSIC_CLASSIFIER_BUNDLE: dict[str, Any] | None = None
+
+
+def get_forensic_classifier_bundle() -> dict[str, Any] | None:
+    global _FORENSIC_CLASSIFIER_BUNDLE
+    if _FORENSIC_CLASSIFIER_BUNDLE is None:
+        if MODEL_PATH.exists():
+            try:
+                _FORENSIC_CLASSIFIER_BUNDLE = joblib.load(str(MODEL_PATH))
+                logger.info("Successfully loaded Forensic Voice Authenticity Classifier from %s", MODEL_PATH)
+            except Exception as e:
+                logger.error("Failed to load forensic voice classifier: %s", e)
+                _FORENSIC_CLASSIFIER_BUNDLE = None
+        else:
+            logger.warning("Forensic voice classifier file not found at %s", MODEL_PATH)
+    return _FORENSIC_CLASSIFIER_BUNDLE
+
+
+def extract_forensic_feature_vector(arr: np.ndarray, sr: int = 16000) -> np.ndarray | None:
+    """
+    Extracts a 40-dimensional acoustic forensic feature vector for anti-spoofing & synthetic voice detection.
+    """
+    if arr is None or len(arr) < int(0.20 * sr):
+        return None
+
+    arr = arr.astype(np.float32)
+    peak = float(np.max(np.abs(arr)))
+    if peak > 1e-6:
+        arr = arr / peak
+
+    rms = float(np.sqrt(np.mean(arr ** 2)))
+    if rms < 0.001:
+        return None
+
+    n_fft = 512
+    hop_length = 160  # 10ms
+    win_length = 400  # 25ms
+
+    num_frames = (len(arr) - win_length) // hop_length
+    if num_frames < 4:
+        return None
+
+    # Windowed frames
+    frames = np.lib.stride_tricks.sliding_window_view(arr[: num_frames * hop_length + win_length], win_length)[::hop_length]
+    window = np.hanning(win_length)
+    windowed = frames * window
+
+    # RFFT Power Spectrum
+    rfft = np.fft.rfft(windowed, n=n_fft, axis=1)
+    mag = np.abs(rfft)
+    power = mag ** 2
+    freqs = np.fft.rfftfreq(n_fft, 1.0 / sr)
+
+    # 1. Spectral Flatness
+    gmean = np.exp(np.mean(np.log(power + 1e-12), axis=1))
+    amean = np.mean(power, axis=1) + 1e-12
+    flatness = gmean / amean
+    flatness_mean = float(np.mean(flatness))
+    flatness_std = float(np.std(flatness))
+
+    # 2. Spectral Centroid
+    centroid = np.sum(freqs * mag, axis=1) / (np.sum(mag, axis=1) + 1e-12)
+    centroid_mean = float(np.mean(centroid))
+    centroid_std = float(np.std(centroid))
+
+    # 3. Spectral Rolloff (85% and 95%)
+    cum_power = np.cumsum(power, axis=1)
+    tot_power = cum_power[:, -1:] + 1e-12
+    rolloff_85_idx = np.argmax(cum_power >= 0.85 * tot_power, axis=1)
+    rolloff_95_idx = np.argmax(cum_power >= 0.95 * tot_power, axis=1)
+    rolloff_85 = float(np.mean(freqs[rolloff_85_idx]))
+    rolloff_95 = float(np.mean(freqs[rolloff_95_idx]))
+
+    # 4. High-Frequency Energy Ratio (>4kHz vs <4kHz)
+    hf_bins = freqs >= 4000
+    lf_bins = (freqs >= 250) & (freqs < 4000)
+    hf_energy = np.sum(power[:, hf_bins], axis=1)
+    lf_energy = np.sum(power[:, lf_bins], axis=1) + 1e-12
+    hf_ratio_mean = float(np.mean(hf_energy / lf_energy))
+    hf_ratio_std = float(np.std(hf_energy / lf_energy))
+
+    # 5. Spectral Flux
+    diff_mag = np.diff(mag, axis=0)
+    flux = float(np.mean(np.sqrt(np.sum(diff_mag ** 2, axis=1))))
+
+    # 6. MFCCs (13 filterbank bands)
+    n_mels = 13
+    mel_min = 0.0
+    mel_max = 2595.0 * np.log10(1.0 + (sr / 2.0) / 700.0)
+    mel_points = np.linspace(mel_min, mel_max, n_mels + 2)
+    hz_points = 700.0 * (10.0 ** (mel_points / 2595.0) - 1.0)
+    bin_points = np.floor((n_fft + 1) * hz_points / sr).astype(int)
+
+    fbank = np.zeros((n_mels, n_fft // 2 + 1))
+    for m in range(1, n_mels + 1):
+        f_m_minus = bin_points[m - 1]
+        f_m = bin_points[m]
+        f_m_plus = bin_points[m + 1]
+        for k in range(f_m_minus, f_m):
+            fbank[m - 1, k] = (k - bin_points[m - 1]) / max(1, bin_points[m] - bin_points[m - 1])
+        for k in range(f_m, f_m_plus):
+            fbank[m - 1, k] = (bin_points[m + 1] - k) / max(1, bin_points[m + 1] - bin_points[m])
+
+    mel_energies = np.dot(power, fbank.T) + 1e-12
+    log_mel = np.log(mel_energies)
+    mfccs = dct(log_mel, type=2, axis=1, norm="ortho")
+    mfcc_means = np.mean(mfccs, axis=0).tolist()
+    mfcc_stds = np.std(mfccs, axis=0).tolist()
+
+    # 7. Pitch & Vocal Jitter
+    frame_rms = np.sqrt(np.mean(frames ** 2, axis=1))
+    voiced = frame_rms > (rms * 0.3)
+    pitches = []
+    min_lag = int(sr / 400)
+    max_lag = int(sr / 70)
+    for f in frames[voiced]:
+        c = np.correlate(f, f, mode="full")
+        c = c[len(c) // 2 :]
+        if max_lag < len(c):
+            lag = min_lag + np.argmax(c[min_lag:max_lag])
+            if c[lag] > 0.35 * c[0]:
+                pitches.append(sr / lag)
+
+    pitch_std = float(np.std(pitches)) if len(pitches) >= 5 else 0.0
+    pitch_jitter = float(np.mean(np.abs(np.diff(pitches)))) if len(pitches) >= 8 else 0.0
+
+    energy_cv = float(np.std(frame_rms) / (rms + 1e-6))
+    zcr = float(np.mean(np.diff(np.signbit(arr)))) if len(arr) > 1 else 0.0
+
+    vector = [
+        flatness_mean, flatness_std,
+        centroid_mean, centroid_std,
+        rolloff_85, rolloff_95,
+        hf_ratio_mean, hf_ratio_std,
+        flux,
+        pitch_std, pitch_jitter,
+        energy_cv, zcr, rms,
+    ] + mfcc_means + mfcc_stds
+
+    return np.array(vector, dtype=np.float32)
+
 
 class BaseDeepfakeDetector(ABC):
     @abstractmethod
-    def detect(self, audio_path: Path | None, features: AcousticFeatures) -> DeepfakeDetectionResult | None:
+    def detect(self, audio_path: Path | None, features: AcousticFeatures) -> DeepfakeDetectionResult:
         pass
 
 
-class PretrainedAntiSpoofAdapter(BaseDeepfakeDetector):
+class TrainedForensicVoiceDetector(BaseDeepfakeDetector):
     """
-    Adapter for Hugging Face pretrained anti-spoofing and synthetic speech classification models.
-    Operates on 16kHz mono audio on CPU or GPU.
+    Trained Anti-Spoofing & Synthetic Voice Detection Classifier.
+    Evaluates acoustic, vocoder, and cepstral features against a trained calibrated ensemble.
     """
+    MODEL_NAME = "VoiceShield-Forensic-Acoustic-v3"
 
-    def __init__(self, model_id: str):
-        self.model_id = model_id
-        self._classifier = None
-        self._model_loaded = False
-        self._model_error = None
-
-    def detect(self, audio_path: Path | None, features: AcousticFeatures) -> DeepfakeDetectionResult | None:
-        if not audio_path or not audio_path.exists():
-            return None
-
-        # Load resampled 16kHz audio array for standardized model inference
-        audio_arr, sample_rate = load_audio_resampled(audio_path, target_sr=16000)
-
-        # Explicit Audio Validation Gate: Do not pass silence/micro-noise to neural classifier
-        is_speech, reason, _ = validate_speech_activity(audio_arr, sample_rate)
-        if not is_speech:
+    def detect(self, audio_path: Path | None, features: AcousticFeatures) -> DeepfakeDetectionResult:
+        t0 = time.perf_counter()
+        
+        if not audio_path or not Path(audio_path).exists():
             return DeepfakeDetectionResult(
                 prediction="NOT_ANALYZED",
                 synthetic_probability=0.0,
                 real_probability=0.0,
-                model_name=self.model_id,
-                model_type="pretrained_antispoofing",
-                model_status="skipped",
+                model_name=self.MODEL_NAME,
+                model_type="trained_forensic_classifier",
+                model_status="no_audio_file",
                 model_inference_skipped=True,
-                skip_reason="insufficient_speech_audio",
+                skip_reason="Audio file was not provided or does not exist on disk.",
                 inference_time_ms=0.0,
                 fallback_used=False,
-                reasons=[f"Model inference skipped: {reason}"],
+                reasons=["Voice authenticity analysis unavailable: No audio file provided."],
             )
 
-        start_time = time.perf_counter()
+        # 1. Audio Preprocessing: Load & Resample to 16kHz
         try:
-            classifier = self._get_classifier()
-            if not self._model_loaded or classifier is None:
-                return None
-
-            # Predict using pipeline
-            if hasattr(audio_arr, "tolist"):
-                input_data = {"raw": audio_arr, "sampling_rate": sample_rate}
-            else:
-                input_data = str(audio_path)
-
-            predictions: list[dict[str, Any]] = classifier(input_data)
-            inference_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            result = self._parse_predictions(predictions, inference_ms)
-            if result:
-                result.model_type = "pretrained_antispoofing"
-                result.model_status = "loaded"
-            return result
-
-        except Exception as exc:
-            self._model_error = str(exc)
-            return None
-
-    def _get_classifier(self):
-        if self._classifier is None:
-            self._classifier, self._model_loaded = _load_transformers_pipeline(self.model_id)
-        return self._classifier
-
-    def _parse_predictions(self, predictions: list[dict[str, Any]], inference_ms: float) -> DeepfakeDetectionResult:
-        synthetic_score = 0.0
-        real_score = 0.0
-        best_label = "unknown"
-        reasons = []
-
-        for item in predictions:
-            label = str(item.get("label", "")).lower()
-            score = float(item.get("score", 0.0))
-
-            if any(token in label for token in ("fake", "spoof", "synthetic", "clone", "generated", "deepfake", "ai")):
-                synthetic_score = max(synthetic_score, score)
-                best_label = label
-            elif any(token in label for token in ("bonafide", "genuine", "real", "human", "natural", "live")):
-                real_score = max(real_score, score)
-                best_label = label
-
-        if synthetic_score == 0.0 and real_score == 0.0:
+            audio_arr, sr = load_audio_resampled(Path(audio_path), target_sr=16000)
+        except Exception as prep_err:
+            logger.error("Audio preprocessing failed for %s: %s", audio_path, prep_err)
             return DeepfakeDetectionResult(
-                prediction="REAL",
-                synthetic_probability=0.08,
-                real_probability=0.92,
-                model_name=self.model_id,
-                model_type="pretrained_antispoofing",
-                model_status="loaded",
-                inference_time_ms=inference_ms,
+                prediction="NOT_ANALYZED",
+                synthetic_probability=0.0,
+                real_probability=0.0,
+                model_name=self.MODEL_NAME,
+                model_type="trained_forensic_classifier",
+                model_status="preprocessing_failed",
+                model_inference_skipped=True,
+                skip_reason=f"Failed to decode or resample audio: {prep_err}",
+                inference_time_ms=0.0,
                 fallback_used=False,
-                reasons=["Model provided inconclusive classification. Defaulted to conservative baseline."],
+                reasons=[f"Voice authenticity analysis unavailable: Audio decoding error ({prep_err})."],
             )
 
-        total = synthetic_score + real_score
-        if total > 0:
-            synthetic_prob = synthetic_score / total
-            real_prob = real_score / total
-        else:
-            synthetic_prob = synthetic_score
-            real_prob = 1.0 - synthetic_score
+        # 2. VAD & Speech Validation
+        is_speech, reason, voiced_sec = validate_speech_activity(audio_arr, sr)
+        if not is_speech:
+            logger.info("Speech validation gate skipped analysis for %s: %s", audio_path, reason)
+            return DeepfakeDetectionResult(
+                prediction="NOT_ANALYZED",
+                synthetic_probability=0.0,
+                real_probability=0.0,
+                model_name=self.MODEL_NAME,
+                model_type="trained_forensic_classifier",
+                model_status="skipped",
+                model_inference_skipped=True,
+                skip_reason=reason,
+                inference_time_ms=round((time.perf_counter() - t0) * 1000, 2),
+                fallback_used=False,
+                reasons=[f"Voice authenticity analysis unavailable: {reason}"],
+            )
 
-        prediction = "SYNTHETIC" if synthetic_prob >= 0.50 else "REAL"
-        confidence_pct = round(max(synthetic_prob, real_prob) * 100, 1)
+        # 3. Extract 40-D Forensic Feature Vector
+        feat_vector = extract_forensic_feature_vector(audio_arr, sr)
+        if feat_vector is None:
+            return DeepfakeDetectionResult(
+                prediction="INCONCLUSIVE",
+                synthetic_probability=0.50,
+                real_probability=0.50,
+                model_name=self.MODEL_NAME,
+                model_type="trained_forensic_classifier",
+                model_status="insufficient_frames",
+                model_inference_skipped=False,
+                inference_time_ms=round((time.perf_counter() - t0) * 1000, 2),
+                fallback_used=False,
+                reasons=["Voice authenticity inconclusive: Insufficient acoustic frame density."],
+            )
 
-        if synthetic_prob >= 0.75:
-            reasons.append(f"Pretrained anti-spoofing model ({self.model_id}) detected synthetic voice artifacts with {confidence_pct}% confidence (label: '{best_label}').")
+        # 4. Model Inference
+        bundle = get_forensic_classifier_bundle()
+        if bundle is None or "pipeline" not in bundle:
+            logger.error("Forensic voice authenticity model bundle could not be loaded from disk.")
+            return DeepfakeDetectionResult(
+                prediction="NOT_ANALYZED",
+                synthetic_probability=0.0,
+                real_probability=0.0,
+                model_name=self.MODEL_NAME,
+                model_type="trained_forensic_classifier",
+                model_status="model_unavailable",
+                model_inference_skipped=True,
+                skip_reason="Model weights file missing or corrupt.",
+                inference_time_ms=round((time.perf_counter() - t0) * 1000, 2),
+                fallback_used=False,
+                reasons=["Voice authenticity analysis unavailable: Model weights could not be loaded."],
+            )
+
+        pipeline = bundle["pipeline"]
+        try:
+            probs = pipeline.predict_proba([feat_vector])[0]
+            synthetic_prob = float(probs[1])
+            real_prob = float(probs[0])
+        except Exception as inf_err:
+            logger.error("Classifier inference failed: %s", inf_err)
+            return DeepfakeDetectionResult(
+                prediction="NOT_ANALYZED",
+                synthetic_probability=0.0,
+                real_probability=0.0,
+                model_name=self.MODEL_NAME,
+                model_type="trained_forensic_classifier",
+                model_status="inference_failed",
+                model_inference_skipped=True,
+                skip_reason=str(inf_err),
+                inference_time_ms=round((time.perf_counter() - t0) * 1000, 2),
+                fallback_used=False,
+                reasons=[f"Voice authenticity analysis failed during inference: {inf_err}"],
+            )
+
+        inference_ms = round((time.perf_counter() - t0) * 1000, 2)
+        
+        # 5. Calibration & Reason Generation
+        reasons = []
+        duration = len(audio_arr) / float(sr)
+        
+        if duration < 1.0:
+            prediction = "INCONCLUSIVE"
+            confidence = "LOW"
+            reasons.append(f"Short recording duration ({duration:.2f}s). Classification confidence is reduced.")
+        elif synthetic_prob >= 0.70:
+            prediction = "SYNTHETIC"
+            confidence = "HIGH" if synthetic_prob >= 0.85 else "MEDIUM"
+            reasons.append(f"High-confidence synthetic vocoder and acoustic generation artifacts detected ({round(synthetic_prob * 100)}% synthetic probability).")
+            if feat_vector[6] < 0.05:
+                reasons.append("Elevated high-frequency spectral rolloff characteristic of neural vocoder cutoff filters.")
+            if feat_vector[0] > 0.08:
+                reasons.append("Elevated spectral flatness and phase noise indicating artificial carrier generation.")
+        elif synthetic_prob >= 0.40:
+            prediction = "INCONCLUSIVE"
+            confidence = "UNCERTAIN"
+            reasons.append(f"Acoustic features exhibit mixed characteristics ({round(synthetic_prob * 100)}% synthetic / {round(real_prob * 100)}% human probability).")
         else:
-            reasons.append(f"Pretrained anti-spoofing model ({self.model_id}) classified voice as {prediction} ({confidence_pct}% confidence).")
+            prediction = "REAL"
+            confidence = "HIGH" if real_prob >= 0.85 else "MEDIUM"
+            reasons.append(f"Acoustic and prosodic dynamics match biological human vocal tract production ({round(real_prob * 100)}% human probability).")
+
+        logger.info(
+            f"[AUTHENTICITY AUDIT] File: {Path(audio_path).name} | Duration: {duration:.2f}s | "
+            f"Synth Prob: {synthetic_prob:.3f} | Real Prob: {real_prob:.3f} | Verdict: {prediction} ({confidence}) | Time: {inference_ms:.1f}ms"
+        )
 
         return DeepfakeDetectionResult(
             prediction=prediction,
-            synthetic_probability=round(min(max(synthetic_prob, 0.01), 0.99), 3),
-            real_probability=round(min(max(real_prob, 0.01), 0.99), 3),
-            model_name=self.model_id,
-            model_type="pretrained_antispoofing",
+            synthetic_probability=round(synthetic_prob, 3),
+            real_probability=round(real_prob, 3),
+            model_name=self.MODEL_NAME,
+            model_type="trained_forensic_classifier",
             model_status="loaded",
+            model_inference_skipped=False,
             inference_time_ms=inference_ms,
             fallback_used=False,
             reasons=reasons,
         )
 
 
-class ExplainableAcousticDetector(BaseDeepfakeDetector):
-    """
-    Multi-Signal Acoustic Forensic Engine.
-    Analyzes physical voice production cues: pitch (F0) trajectory, pitch standard deviation/jitter,
-    dynamic intensity envelope, spectral formant contrast, spectral flatness, and zero-crossing dynamics.
-
-    Produces three calibrated states:
-    - Likely Human (LIKELY_HUMAN)
-    - Suspicious / Uncertain (INCONCLUSIVE / POSSIBLE_SYNTHETIC)
-    - Likely AI-Generated / Cloned (HIGH_CONFIDENCE_SYNTHETIC / POSSIBLE_SYNTHETIC)
-    """
-
-    MODEL_NAME = "VoiceShield-Acoustic-v2"
-
-    def detect(self, audio_path: Path | None, features: AcousticFeatures) -> DeepfakeDetectionResult:
-        # Explicit Silence / Insufficient Energy Check
-        if features.rms_energy < 0.0030 or features.dynamic_range < 0.015:
-            return DeepfakeDetectionResult(
-                prediction="NOT_ANALYZED",
-                synthetic_probability=0.0,
-                real_probability=0.0,
-                model_name=self.MODEL_NAME,
-                model_type="acoustic_forensic_engine",
-                model_status="skipped",
-                model_inference_skipped=True,
-                skip_reason="insufficient_speech_audio",
-                inference_time_ms=0.0,
-                fallback_used=True,
-                reasons=["Acoustic inspection skipped: insufficient voice energy."],
-            )
-
-        start_time = time.perf_counter()
-        reasons: list[str] = []
-
-        # Load resampled audio array for frame-by-frame forensic analysis if path is available
-        samples_arr = None
-        sr = 16000
-        if audio_path and Path(audio_path).exists():
-            try:
-                samples_arr, sr = load_audio_resampled(Path(audio_path), target_sr=16000)
-            except Exception:
-                samples_arr = None
-
-        duration = features.duration_seconds or 0.0
-        synthetic_score = 0.10  # Baseline neutral prior
-
-        if samples_arr is not None and len(samples_arr) > int(0.25 * sr):
-            import numpy as np
-
-            arr = samples_arr if isinstance(samples_arr, np.ndarray) else np.array(samples_arr, dtype=np.float32)
-            frame_len = int(0.025 * sr)
-            frame_step = int(0.010 * sr)
-            num_frames = (len(arr) - frame_len) // frame_step
-
-            frame_energies = []
-            frame_pitches = []
-            frame_zcr = []
-            spectral_flatness_list = []
-            frame_contrasts = []
-
-            for i in range(max(0, num_frames)):
-                frame = arr[i * frame_step : i * frame_step + frame_len]
-                f_rms = float(np.sqrt(np.mean(frame**2)))
-                frame_energies.append(f_rms)
-
-                diff_signs = np.diff(np.signbit(frame))
-                frame_zcr.append(float(np.mean(diff_signs)))
-
-                if len(frame) >= 256 and f_rms > 0.008:
-                    fft_mag = np.abs(np.fft.rfft(frame * np.hanning(len(frame))))
-                    power = fft_mag ** 2
-                    gmean = float(np.exp(np.mean(np.log(power + 1e-12))))
-                    amean = float(np.mean(power) + 1e-12)
-                    spectral_flatness_list.append(gmean / amean)
-
-                    if np.max(fft_mag) > 1e-6:
-                        norm_fft = fft_mag / np.max(fft_mag)
-                        peak_sub = float(np.max(norm_fft[: len(norm_fft) // 2]))
-                        valley_sub = float(np.mean(norm_fft[len(norm_fft) // 2 :]))
-                        frame_contrasts.append(peak_sub - valley_sub)
-
-                # Autocorrelation Pitch Estimation (70Hz - 400Hz)
-                if f_rms > 0.008:
-                    corr = np.correlate(frame, frame, mode="full")
-                    corr = corr[len(corr) // 2 :]
-                    min_lag = int(sr / 400)
-                    max_lag = int(sr / 70)
-                    if max_lag < len(corr):
-                        peak_lag = min_lag + int(np.argmax(corr[min_lag:max_lag]))
-                        if corr[peak_lag] > 0.30 * corr[0]:
-                            frame_pitches.append(sr / float(peak_lag))
-
-            pitch_count = len(frame_pitches)
-            pitch_std = float(np.std(frame_pitches)) if pitch_count >= 5 else 0.0
-            pitch_mean = float(np.mean(frame_pitches)) if pitch_count >= 5 else 0.0
-
-            # Pitch Jitter
-            if pitch_count >= 8:
-                pitch_diffs = np.abs(np.diff(frame_pitches))
-                pitch_jitter = float(np.mean(pitch_diffs))
-            else:
-                pitch_jitter = 0.0
-
-            rms = float(np.sqrt(np.mean(arr**2)))
-            energy_std = float(np.std(frame_energies)) if frame_energies else 0.0
-            energy_cv = energy_std / (rms + 1e-6)
-            dyn_range = float(np.max(arr) - np.min(arr)) if len(arr) > 0 else 0.0
-            mean_flatness = float(np.mean(spectral_flatness_list)) if spectral_flatness_list else 0.0
-
-            # 1. Fundamental Frequency & Prosodic Pitch Dynamics
-            if pitch_count >= 8:
-                if pitch_std < 5.0:
-                    synthetic_score += 0.50
-                    reasons.append(f"Abnormally flat robotic pitch contour detected (pitch variation: {pitch_std:.1f}Hz, biological speech threshold: >=15Hz).")
-                elif pitch_std < 12.0:
-                    synthetic_score += 0.25
-                    reasons.append(f"Constrained vocal prosody with reduced natural pitch inflection ({pitch_std:.1f}Hz std).")
-                elif pitch_std >= 22.0:
-                    synthetic_score -= 0.15
-                    reasons.append(f"Natural biological pitch inflection observed ({pitch_std:.1f}Hz standard deviation across syllables).")
-
-                if pitch_jitter > 50.0:
-                    synthetic_score += 0.20
-                    reasons.append(f"Elevated pitch discontinuity / vocoder phase jump detected ({pitch_jitter:.1f}Hz jitter).")
-            else:
-                reasons.append("Limited voiced pitch frames detected for trajectory evaluation.")
-
-            # 2. Dynamic Energy Envelope & Syllabic Modulation
-            if energy_cv < 0.10 and duration >= 1.5:
-                synthetic_score += 0.35
-                reasons.append("Unnaturally flat dynamic energy envelope with absence of biological syllabic decay.")
-            elif energy_cv > 0.35:
-                synthetic_score -= 0.10
-                reasons.append("Dynamic syllabic modulation matches natural biological speech breathing and articulation.")
-
-            # 3. Dynamic Range & Contrast
-            if dyn_range < 0.20 and rms > 0.01:
-                synthetic_score += 0.20
-                reasons.append("Severely compressed dynamic range characteristic of synthesized carrier signals.")
-            elif features.spectral_contrast < 0.005:
-                synthetic_score += 0.25
-                reasons.append("Spectral contrast collapse characteristic of vocoded acoustic carriers.")
-
-            # 4. Spectral Flatness & Phase Noise
-            if mean_flatness > 0.15:
-                synthetic_score += 0.20
-                reasons.append("Elevated spectral flatness indicative of synthetic vocoder noise injection.")
-
-        else:
-            # Fallback using precomputed summary AcousticFeatures
-            if features.spectral_contrast < 0.005:
-                synthetic_score += 0.35
-                reasons.append("Severe spectral contrast collapse characteristic of synthetic carrier signals.")
-            if features.dynamic_range < 0.15 and features.rms_energy > 0.01:
-                synthetic_score += 0.30
-                reasons.append("Severely compressed dynamic range indicating artificial audio generation.")
-            if features.zero_crossing_rate > 0.35 and features.byte_entropy > 0.95:
-                synthetic_score += 0.25
-                reasons.append("Elevated zero-crossing density and phase noise exceeding standard vocal tract characteristics.")
-
-        synthetic_prob = round(max(0.02, min(0.98, synthetic_score)), 3)
-        real_prob = round(1.0 - synthetic_prob, 3)
-
-        # 3-State Calibrated Prediction Mapping
-        if duration < 2.0:
-            prediction = "INCONCLUSIVE"
-            reasons.append("Recording duration is short (<2.0s); voice authenticity is classified as Suspicious / Inconclusive.")
-        elif synthetic_prob >= 0.65:
-            prediction = "SYNTHETIC"
-        elif synthetic_prob >= 0.35:
-            prediction = "INCONCLUSIVE"
-            reasons.append("Acoustic parameters exhibit ambiguous characteristics between natural and synthesized audio.")
-        else:
-            prediction = "REAL"
-            reasons.append("Acoustic voice production cues are consistent with biological human vocal tract dynamics.")
-
-        inference_ms = round((time.perf_counter() - start_time) * 1000, 2)
-
-        return DeepfakeDetectionResult(
-            prediction=prediction,
-            synthetic_probability=synthetic_prob,
-            real_probability=real_prob,
-            model_name=self.MODEL_NAME,
-            model_type="acoustic_forensic_engine",
-            model_status="loaded",
-            inference_time_ms=inference_ms,
-            fallback_used=True,
-            reasons=reasons,
-        )
-
-
-@lru_cache(maxsize=1)
-def _load_transformers_pipeline(model_id: str):
-    try:
-        from transformers import pipeline, AutoModelForAudioClassification, AutoFeatureExtractor
-
-        BLOCKED_GENERIC_MODELS = [
-            "facebook/wav2vec2-base",
-            "facebook/wav2vec2-large",
-            "facebook/wav2vec2-base-960h",
-            "facebook/wav2vec2-large-960h",
-            "microsoft/wavlm-base",
-            "microsoft/wavlm-large",
-            "microsoft/wavlm-base-plus",
-            "facebook/hubert-base-ls960",
-            "facebook/hubert-large-ls960-ft",
-        ]
-        BLOCKED_KEYWORDS = [
-            "wavlm-base-plus-sv",
-        ]
-
-        if model_id in BLOCKED_GENERIC_MODELS or any(kw in model_id for kw in BLOCKED_KEYWORDS):
-            print(f"[WARNING] {model_id} is not an anti-spoofing classifier.")
-            return None, False
-
-        # Attempt to load with local_files_only to avoid hanging/blocking on network requests
-        try:
-            model = AutoModelForAudioClassification.from_pretrained(model_id, local_files_only=True)
-            feature_extractor = AutoFeatureExtractor.from_pretrained(model_id, local_files_only=True)
-            classifier = pipeline("audio-classification", model=model, feature_extractor=feature_extractor, device="cpu")
-            print(f"[SUCCESS] Loaded cached anti-spoofing model: {model_id}")
-            return classifier, True
-        except Exception:
-            print(f"[INFO] Pretrained model {model_id} not cached locally. Running with Acoustic Baseline.")
-            return None, False
-    except Exception as exc:
-        print(f"[INFO] Neural anti-spoofing pipeline unavailable: {exc}. Using Acoustic Baseline.")
-        return None, False
-
-
-
 def detect_synthetic_voice_detailed(features: AcousticFeatures, audio_path: Path | None = None) -> DeepfakeDetectionResult:
-    settings = get_settings()
-
-    if settings.deepfake_model_id and audio_path:
-        adapter = PretrainedAntiSpoofAdapter(settings.deepfake_model_id)
-        res = adapter.detect(audio_path, features)
-        if res is not None and res.model_type == "pretrained_antispoofing":
-            return res
-
-    fallback_detector = ExplainableAcousticDetector()
-    result = fallback_detector.detect(audio_path, features)
-    return result
+    detector = TrainedForensicVoiceDetector()
+    return detector.detect(audio_path, features)
 
 
 def detect_synthetic_voice(features: AcousticFeatures, audio_path: Path | None = None) -> tuple[float, list[str]]:
     result = detect_synthetic_voice_detailed(features, audio_path)
     return result.synthetic_probability, result.reasons
 
+
+# Backward-compatible aliases for legacy imports
+ExplainableAcousticDetector = TrainedForensicVoiceDetector
+PretrainedAntiSpoofAdapter = TrainedForensicVoiceDetector

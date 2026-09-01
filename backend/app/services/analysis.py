@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from app.core.config import get_settings
 from app.db import store
-from app.models.schemas import AnalysisResponse, ThreatIndicator
+from app.models.schemas import AnalysisResponse, ThreatIndicator, VoiceAuthenticityDetail
 from app.services.audio.preprocessing import (
     extract_features,
     load_audio,
@@ -207,28 +207,52 @@ def analyze_audio_file(
         f"Acoustics={acoustic_ms:.1f}ms, NLP={nlp_ms:.1f}ms, RiskFusion={risk_ms:.1f}ms)"
     )
 
+    # Build Structured Voice Authenticity Detail
+    synth_p = float(df_result.synthetic_probability)
+    real_p = float(df_result.real_probability)
+
+    if df_result.model_inference_skipped or df_result.prediction == "NOT_ANALYZED":
+        voice_auth_label = "INCONCLUSIVE" if df_result.skip_reason else "ANALYSIS_FAILED"
+        auth_conf = "UNCERTAIN"
+        auth_status = "skipped" if df_result.model_inference_skipped else "failed"
+    elif df_result.prediction == "SYNTHETIC" or synth_p >= 0.70:
+        voice_auth_label = "LIKELY_SYNTHETIC"
+        auth_conf = "HIGH" if synth_p >= 0.85 else "MEDIUM"
+        auth_status = "completed"
+    elif synth_p >= 0.40 or df_result.prediction == "INCONCLUSIVE" or is_chunk or duration < 1.0:
+        voice_auth_label = "INCONCLUSIVE"
+        auth_conf = "UNCERTAIN"
+        auth_status = "completed"
+    else:
+        voice_auth_label = "LIKELY_HUMAN"
+        auth_conf = "HIGH" if real_p >= 0.85 else "MEDIUM"
+        auth_status = "completed"
+
+    voice_authenticity_detail = VoiceAuthenticityDetail(
+        label=voice_auth_label,
+        synthetic_probability=round(synth_p, 3),
+        human_probability=round(real_p, 3),
+        confidence=auth_conf,
+        model_name=df_result.model_name,
+        analysis_status=auth_status,
+        reasons=df_result.reasons,
+    )
+
     detected_threats = [
         indicator.label for indicator in indicators if indicator.severity in {"MEDIUM", "HIGH", "CRITICAL"}
     ]
-
-    if voice_authenticity == "HIGH_CONFIDENCE_SYNTHETIC":
-        prediction_label = "SYNTHETIC"
-    elif voice_authenticity == "POSSIBLE_SYNTHETIC":
-        prediction_label = "POSSIBLE_SYNTHETIC"
-    elif voice_authenticity == "INCONCLUSIVE":
-        prediction_label = "INCONCLUSIVE"
-    else:
-        prediction_label = "REAL"
 
     response = AnalysisResponse(
         analysis_id=str(uuid4()),
         analysis_status=analysis_status,
         speech_detected=True,
-        model_inference_skipped=False,
-        prediction=prediction_label,
-        voice_authenticity=voice_authenticity,
-        confidence=round(max(deepfake_probability, 1.0 - deepfake_probability), 3),
-        deepfake_probability=round(deepfake_probability, 3),
+        model_inference_skipped=df_result.model_inference_skipped,
+        prediction="SYNTHETIC" if voice_auth_label == "LIKELY_SYNTHETIC" else ("REAL" if voice_auth_label == "LIKELY_HUMAN" else "INCONCLUSIVE"),
+        voice_authenticity=voice_auth_label,
+        voice_authenticity_detail=voice_authenticity_detail,
+        confidence=round(max(synth_p, real_p), 3),
+        deepfake_probability=round(synth_p, 3),
+        real_probability=round(real_p, 3),
         speaker_match=round(1.0 - speaker_mismatch, 3) if reference_embedding is not None else None,
         speaker_mismatch=round(speaker_mismatch, 3) if reference_embedding else None,
         speaker_match_score=speaker_match_score,
