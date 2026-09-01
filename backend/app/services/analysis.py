@@ -1,4 +1,5 @@
 import concurrent.futures
+import gc
 import logging
 import time
 from datetime import UTC, datetime
@@ -255,6 +256,11 @@ def analyze_audio_file(
 
     if not is_chunk:
         store.save_analysis(response.model_dump())
+
+    # Explicit memory release for audio buffers
+    del samples, audio
+    gc.collect()
+
     return response
 
 

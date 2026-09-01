@@ -496,16 +496,22 @@ export function LiveMonitorPage({ onNavigate }) {
     },
   });
 
+  const chunkInFlightRef = useRef(false);
+  const lastChunkSentTimeRef = useRef(0);
+
   // Rolling Chunk Recorder for Audio Waveform & VAD
   const chunkRecorder = useChunkRecorder({
     onChunk: async (chunkFile) => {
-      try {
-        const textToSend = liveTranscriptRef.current || transcript || accumulatedTranscriptRef.current;
-        const normalizedText = normalizeTranscript(textToSend);
+      const now = Date.now();
+      if (chunkInFlightRef.current || now - lastChunkSentTimeRef.current < 12000) {
+        return;
+      }
+      chunkInFlightRef.current = true;
+      lastChunkSentTimeRef.current = now;
 
+      try {
         const result = await analyzeChunk({
           file: chunkFile,
-          transcript: normalizedText.trim() || undefined,
         });
 
         if (result && result.deepfake_probability != null) {
@@ -516,6 +522,8 @@ export function LiveMonitorPage({ onNavigate }) {
         }
       } catch (err) {
         // Rolling chunk errors are non-fatal
+      } finally {
+        chunkInFlightRef.current = false;
       }
     },
   });

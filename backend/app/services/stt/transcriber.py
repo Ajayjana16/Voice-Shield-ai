@@ -25,14 +25,15 @@ def _get_whisper_model() -> Any:
         from faster_whisper import WhisperModel
 
         model_size = os.getenv("STT_MODEL_SIZE", "tiny.en")
-        cpu_threads = int(os.getenv("STT_CPU_THREADS", "2"))
-        logger.info(f"Initializing faster-whisper model ({model_size}) on CPU with {cpu_threads} threads...")
+        cpu_threads = int(os.getenv("STT_CPU_THREADS", "1"))
+        logger.info(f"Initializing faster-whisper model ({model_size}) on CPU with {cpu_threads} thread...")
         t0 = time.perf_counter()
         _whisper_model = WhisperModel(
             model_size,
             device="cpu",
             compute_type="int8",
             cpu_threads=cpu_threads,
+            num_workers=1,
         )
         logger.info(f"faster-whisper model initialized in {(time.perf_counter() - t0) * 1000:.1f}ms.")
         return _whisper_model

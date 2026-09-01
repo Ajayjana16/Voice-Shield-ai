@@ -227,6 +227,7 @@ export function AnalyzePage({ onNavigate }) {
 
   // Automated Server-side Speech-to-Text
   const handleExtractStt = async () => {
+    if (isProcessing) return;
     if (!file) {
       setErrorMessage("Please attach an audio recording first.");
       return;
@@ -284,6 +285,7 @@ export function AnalyzePage({ onNavigate }) {
 
   // Execute Forensic Analysis
   const handleRunAnalysis = async () => {
+    if (isProcessing) return;
     setErrorMessage(null);
     const normalizedText = normalizeTranscript(transcript).trim();
 
@@ -305,31 +307,14 @@ export function AnalyzePage({ onNavigate }) {
     abortControllerRef.current = controller;
 
     setIsProcessing(true);
-    setProcessingStage(1);
-    setProcessingMessage("1/7 Uploading audio...");
+    setProcessingStage(2);
+    setProcessingMessage("Analyzing recording & extracting acoustic features...");
 
     try {
       if (file) {
         console.log("[AnalyzePage] Running multimodal forensic analysis on file:", file.name, "with transcript length:", normalizedText.length);
-        // Stage 1: Uploading audio
-        await new Promise((r) => setTimeout(r, 60));
-        if (currentReqId !== activeRequestIdRef.current) return;
-        setProcessingStage(2);
-        setProcessingMessage("2/7 Preparing audio & acoustic features...");
 
-        // Stage 2: Preparing audio
-        await new Promise((r) => setTimeout(r, 60));
-        if (currentReqId !== activeRequestIdRef.current) return;
-        setProcessingStage(3);
-        setProcessingMessage("3/7 Transcribing speech (Server-side STT)...");
-
-        // Stage 3: Transcribing speech
-        await new Promise((r) => setTimeout(r, 60));
-        if (currentReqId !== activeRequestIdRef.current) return;
-        setProcessingStage(4);
-        setProcessingMessage("4/7 Analyzing conversation & social engineering intent...");
-
-        // Stage 4: Scam Intelligence & Risk Fusion
+        // Scam Intelligence & Risk Fusion
         const result = await analyzeAudio({
           file: file,
           transcript: normalizedText || undefined,

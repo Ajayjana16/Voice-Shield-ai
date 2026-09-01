@@ -179,11 +179,17 @@ async def transcribe(file: UploadFile = File(...)) -> SttResponse:
     settings = get_settings()
     path = settings.temp_audio_dir / f"stt_{uuid4().hex}_{_clean_filename(file.filename)}"
     await _save_upload(file, path)
-    response = transcribe_audio(path)
     try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        pass
+        response = transcribe_audio(path)
+    finally:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            await file.close()
+        except Exception:
+            pass
     return response
 
 
@@ -309,6 +315,10 @@ async def _analyze_upload(
         try:
             path.unlink(missing_ok=True)
         except OSError:
+            pass
+        try:
+            await file.close()
+        except Exception:
             pass
 
     if not is_chunk:
