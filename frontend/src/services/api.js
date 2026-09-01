@@ -100,6 +100,18 @@ export async function registerSpeaker({ file, speakerId }) {
   return response.data;
 }
 
+export async function saveAnalysisRecord(payload) {
+  try {
+    const response = await apiClient.post(`/analysis/save`, payload, {
+      timeout: DEFAULT_API_TIMEOUT,
+    });
+    return response.data;
+  } catch (err) {
+    console.warn("Failed to persist analysis record to backend database:", err);
+    return null;
+  }
+}
+
 export async function getHealth() {
   const response = await apiClient.get(`/health`, {
     timeout: HEALTH_CHECK_TIMEOUT,

@@ -1,6 +1,7 @@
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
@@ -224,8 +225,19 @@ async def verify_speaker(speaker_id: str = Form(...), file: UploadFile = File(..
     }
 
 
-@router.get("/analysis/{analysis_id}", response_model=AnalysisResponse)
-def get_analysis(analysis_id: str) -> dict:
+@router.post("/analysis/save")
+@router.post("/analyses/save")
+def save_custom_analysis(payload: dict[str, Any]) -> dict[str, Any]:
+    analysis_id = payload.get("analysis_id") or payload.get("id") or f"analysis_{uuid4().hex[:12]}"
+    payload["analysis_id"] = analysis_id
+    if "created_at" not in payload:
+        payload["created_at"] = datetime.now(UTC).isoformat()
+    store.save_analysis(payload)
+    return {"status": "saved", "analysis_id": analysis_id}
+
+
+@router.get("/analysis/{analysis_id}")
+def get_analysis(analysis_id: str) -> dict[str, Any]:
     payload = store.get_analysis(analysis_id)
     if not payload:
         raise HTTPException(status_code=404, detail="Analysis not found")
@@ -233,7 +245,7 @@ def get_analysis(analysis_id: str) -> dict:
 
 
 @router.get("/analyses", response_model=AnalysisHistoryResponse)
-def list_recent_analyses(limit: int = 20) -> AnalysisHistoryResponse:
+def list_recent_analyses(limit: int = 50) -> AnalysisHistoryResponse:
     return AnalysisHistoryResponse(analyses=store.list_analyses(max(1, min(limit, 100))))
 
 

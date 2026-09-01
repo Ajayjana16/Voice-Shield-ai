@@ -31,6 +31,7 @@ import {
   analyzeContext,
   transcribeAudio,
   getHealth,
+  saveAnalysisRecord,
 } from "../services/api";
 import ThreatSignalCard from "../components/ThreatSignalCard";
 import { normalizeTranscript } from "../utils/transcriptNormalizer";
@@ -301,8 +302,10 @@ export function AnalyzePage({ onNavigate }) {
         const finalCategory = result.final_scam_category || result.possible_scam_category || "Routine / Normal Call";
         const finalLevel = result.final_threat_level || result.risk_level || "LOW";
 
-        setAnalysis({
+        const reportObj = {
           analysis_id: "forensic_" + Date.now().toString(36),
+          created_at: new Date().toISOString(),
+          analysis_status: "completed",
           final_risk_score: finalScore,
           risk_level: finalLevel,
           possible_scam_category: finalCategory,
@@ -318,7 +321,10 @@ export function AnalyzePage({ onNavigate }) {
           risk_reasoning: indicators.length > 0
             ? `Forensic analysis identified ${indicators.length} threat indicators in the submitted conversation content.`
             : "No high-confidence telecommunication fraud or coercion indicators were detected in the conversation content.",
-        });
+        };
+
+        setAnalysis(reportObj);
+        saveAnalysisRecord(reportObj);
       }
     } catch (err) {
       console.error("[AnalyzePage] Forensic analysis request error:", err);

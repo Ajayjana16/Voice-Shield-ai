@@ -30,7 +30,12 @@ import { Waveform } from "../components/Waveform";
 import ThreatSignalCard from "../components/ThreatSignalCard";
 import { useChunkRecorder } from "../hooks/useChunkRecorder";
 import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
-import { analyzeChunk, analyzeAudio, analyzeContext } from "../services/api";
+import {
+  analyzeChunk,
+  analyzeAudio,
+  analyzeContext,
+  saveAnalysisRecord,
+} from "../services/api";
 import { normalizeTranscript } from "../utils/transcriptNormalizer";
 
 const INITIAL_LIVE_ANALYSIS = {
@@ -738,6 +743,7 @@ export function LiveMonitorPage({ onNavigate }) {
         }
 
         setFinalReport(reportData);
+        saveAnalysisRecord(reportData);
         addTimelineEvent("Session report finalized", "info");
       } else {
         // No speech captured at all during session

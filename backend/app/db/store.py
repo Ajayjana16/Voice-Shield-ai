@@ -51,6 +51,21 @@ def init_db() -> None:
 
 
 def save_analysis(payload: dict[str, Any]) -> None:
+    analysis_id = payload.get("analysis_id") or payload.get("id")
+    if not analysis_id:
+        return
+    created_at = payload.get("created_at") or datetime.now(UTC).isoformat()
+    risk_level = payload.get("risk_level") or payload.get("final_threat_level") or "LOW"
+    final_risk_score = payload.get("final_risk_score")
+    if final_risk_score is None and "context_risk_score" in payload:
+        final_risk_score = payload.get("context_risk_score")
+
+    clean_payload = dict(payload)
+    clean_payload["analysis_id"] = analysis_id
+    clean_payload["created_at"] = created_at
+    clean_payload["risk_level"] = risk_level
+    clean_payload["final_risk_score"] = final_risk_score
+
     with _connect() as connection:
         connection.execute(
             """
@@ -59,11 +74,11 @@ def save_analysis(payload: dict[str, Any]) -> None:
             VALUES (?, ?, ?, ?, ?)
             """,
             (
-                payload["analysis_id"],
-                payload["created_at"],
-                payload["risk_level"],
-                payload.get("final_risk_score"),
-                json.dumps(payload),
+                analysis_id,
+                created_at,
+                risk_level,
+                final_risk_score,
+                json.dumps(clean_payload),
             ),
         )
 
