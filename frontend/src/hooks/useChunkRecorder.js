@@ -29,30 +29,36 @@ export function useChunkRecorder({ onChunk }) {
       analyserRef.current = analyser;
 
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      let lastUpdateMs = 0;
+      let lastActivity = "idle";
 
-      const checkLevel = () => {
+      const checkLevel = (now) => {
         if (!analyserRef.current) return;
         analyserRef.current.getByteFrequencyData(dataArray);
 
-        let sum = 0;
-        for (let i = 0; i < dataArray.length; i++) {
-          sum += dataArray[i];
-        }
-        const avg = sum / dataArray.length;
-        const normalized = Math.min(1.0, avg / 80); // 0 to 1
-        setAudioLevel(normalized);
+        // Throttle React state updates to 10 FPS (every 100ms) unless state transitions
+        if (now - lastUpdateMs > 100) {
+          lastUpdateMs = now;
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i];
+          }
+          const avg = sum / dataArray.length;
+          const normalized = Math.min(1.0, avg / 80); // 0 to 1
+          setAudioLevel(normalized);
 
-        // VAD threshold
-        if (normalized > 0.08) {
-          setSpeechActivity("speaking");
-        } else {
-          setSpeechActivity("listening");
+          // VAD threshold
+          const newActivity = normalized > 0.08 ? "speaking" : "listening";
+          if (newActivity !== lastActivity) {
+            lastActivity = newActivity;
+            setSpeechActivity(newActivity);
+          }
         }
 
         animFrameRef.current = requestAnimationFrame(checkLevel);
       };
 
-      checkLevel();
+      animFrameRef.current = requestAnimationFrame(checkLevel);
     } catch (e) {
       console.warn("Web Audio Analyser unavailable:", e);
     }

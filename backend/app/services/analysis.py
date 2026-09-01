@@ -102,7 +102,7 @@ def analyze_audio_file(
     def _run_stt_branch():
         t0 = time.perf_counter()
         eff_tx = transcript
-        if not eff_tx or not eff_tx.strip():
+        if (not eff_tx or not eff_tx.strip()) and not is_chunk:
             stt_res = transcribe_audio(path=path, samples=samples)
             if stt_res.transcript and stt_res.transcript.strip():
                 eff_tx = stt_res.transcript.strip()

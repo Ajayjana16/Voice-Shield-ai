@@ -1,6 +1,6 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, memo } from "react";
 
-export function Waveform({ analyser = null, isLive = false, audioLevel = 0, score = 0 }) {
+function WaveformComponent({ analyser = null, isLive = false, audioLevel = 0, score = 0 }) {
   const canvasRef = useRef(null);
 
   useEffect(() => {
@@ -97,3 +97,5 @@ export function Waveform({ analyser = null, isLive = false, audioLevel = 0, scor
     </div>
   );
 }
+
+export const Waveform = memo(WaveformComponent);
