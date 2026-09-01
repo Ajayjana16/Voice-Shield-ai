@@ -50,6 +50,22 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(router, prefix=settings.api_prefix)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Root-level endpoints (no /api prefix) for Render uptime probes
+    # Render probes GET / and HEAD / every 30 s; they MUST return HTTP 200.
+    # The frontend health check hits /api/health (via the router above).
+    # These two routes handle the bare-domain probes so Render marks the
+    # service as healthy and does NOT return 404.
+    # ─────────────────────────────────────────────────────────────────────
+    @app.get("/", include_in_schema=False)
+    def root_probe() -> dict:
+        return {"status": "online", "service": "Voice Shield AI API"}
+
+    @app.get("/health", include_in_schema=False)
+    def root_health_probe() -> dict:
+        return {"status": "online", "service": "Voice Shield AI API"}
+
     return app
 
 

@@ -31,15 +31,36 @@ export default function App() {
     };
     window.addEventListener("popstate", onPopState);
 
-    // Initial Health Check
-    getHealth()
-      .then((data) => {
-        setHealth("online");
-        setHealthInfo(data);
-      })
-      .catch(() => setHealth("offline"));
+    // Health check with retry — handles Render cold starts (may take up to 30 s)
+    let cancelled = false;
+    let retryTimer = null;
 
-    return () => window.removeEventListener("popstate", onPopState);
+    async function checkHealth(attempt = 0) {
+      try {
+        const data = await getHealth();
+        if (!cancelled) {
+          setHealth("online");
+          setHealthInfo(data);
+        }
+      } catch {
+        if (cancelled) return;
+        const delays = [3000, 6000, 12000, 20000, 30000];
+        const delay = delays[Math.min(attempt, delays.length - 1)];
+        retryTimer = setTimeout(() => {
+          if (!cancelled) checkHealth(attempt + 1);
+        }, delay);
+        // Show offline only after the first instant attempt fails
+        if (attempt === 0) setHealth("offline");
+      }
+    }
+
+    checkHealth();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      window.removeEventListener("popstate", onPopState);
+    };
   }, []);
 
   function handleNavigate(path) {
